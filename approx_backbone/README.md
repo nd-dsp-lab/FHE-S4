@@ -32,6 +32,24 @@ From `gelu_retrain_results.json`:
   - tiny script to verify the checkpoint still gives the expected test accuracy
 - `__init__.py`
   - package exports
+- `checkpoints/`
+  - packaged approximate backbone checkpoints for sharing/push
+
+## Checkpoint Bundle
+
+The current checkpoint bundle is stored in:
+
+- `approx_backbone/checkpoints/`
+
+Included checkpoint files:
+
+- `s4d_best_exact.pt`
+- `s4d_best_linear_gate.pt`
+- `s4d_best_poly4_gate.pt`
+- `s4d_best_poly6_gate.pt`
+- `s4d_best_gelu_exact_glu_linear_gate.pt`
+- `s4d_best_gelu_poly4_glu_linear_gate.pt`
+- `s4d_best_gelu_poly6_glu_linear_gate.pt`
 
 ## What Is Approximated
 
@@ -94,6 +112,12 @@ Or specify a checkpoint manually:
 
 ```bash
 python eval_approx_backbone.py --checkpoint s4d_best_gelu_poly6_glu_linear_gate.pt
+```
+
+Or point directly to the packaged checkpoint directory:
+
+```bash
+python eval_approx_backbone.py --checkpoint approx_backbone/checkpoints/s4d_best_gelu_poly6_glu_linear_gate.pt
 ```
 
 Expected behavior:
