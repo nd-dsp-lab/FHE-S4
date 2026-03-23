@@ -26,7 +26,6 @@ The script supports:
 - `fhe_full`: hybrid milestone (Toeplitz in FHE, rest in plaintext)
 - `both`: `plain + fhe_stub` (default)
 
-This is intentionally staged so students can debug one milestone at a time.
 
 ## Important Guardrails
 

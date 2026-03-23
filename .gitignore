@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+build/
+*.png
+*.json
+*.pt
+!approx_backbone/checkpoints/s4d_best_gelu_poly6_glu_linear_gate.pt

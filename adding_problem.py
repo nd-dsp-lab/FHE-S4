@@ -70,10 +70,17 @@ class AddingDataset(Dataset):
 class AddingModel(nn.Module):
     """Encoder (2 -> d_model) + MiniS4D for adding problem. Input (B, L, 2) -> output (B, 1)."""
 
-    def __init__(self, d_model=64, d_state=64, seq_len=1000, dropout=0.0):
+    def __init__(self, d_model=64, d_state=64, seq_len=1000, dropout=0.0, glu_mode="exact", gelu_mode="exact"):
         super().__init__()
         self.encoder = nn.Linear(2, d_model)
-        self.s4d = MiniS4D(d_model=d_model, d_state=d_state, L=seq_len, dropout=dropout)
+        self.s4d = MiniS4D(
+            d_model=d_model,
+            d_state=d_state,
+            L=seq_len,
+            dropout=dropout,
+            glu_mode=glu_mode,
+            gelu_mode=gelu_mode,
+        )
 
     def forward(self, x):
         # x: (B, L, 2)
@@ -120,6 +127,23 @@ def evaluate(model, loader, device, tolerance=0.04):
     return mse, acc
 
 
+def measure_pre_gate_range(model, loader, device):
+    model.eval()
+    stats = {"min": float("inf"), "max": float("-inf")}
+
+    def hook(_module, _inputs, output):
+        stats["min"] = min(stats["min"], float(output.min().item()))
+        stats["max"] = max(stats["max"], float(output.max().item()))
+
+    handle = model.s4d.output_linear[0].register_forward_hook(hook)
+    with torch.no_grad():
+        for x, _ in loader:
+            x = x.to(device)
+            _ = model(x)
+    handle.remove()
+    return stats
+
+
 def save_results(path, info):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(info, f, indent=2, sort_keys=True)
@@ -131,6 +155,20 @@ def main():
     parser.add_argument("--d_model", type=int, default=64, help="Model dimension")
     parser.add_argument("--d_state", type=int, default=64, help="S4D state size")
     parser.add_argument("--dropout", type=float, default=0.0)
+    parser.add_argument(
+        "--glu_mode",
+        type=str,
+        default="exact",
+        choices=("exact", "poly4_gate", "poly6_gate", "linear_gate"),
+        help="Select the GLU gate approximation used inside MiniS4D.",
+    )
+    parser.add_argument(
+        "--gelu_mode",
+        type=str,
+        default="exact",
+        choices=("exact", "poly4", "poly6"),
+        help="Select the GELU approximation used inside MiniS4D.",
+    )
     parser.add_argument("--train_samples", type=int, default=10000, help="Train set size")
     parser.add_argument("--val_samples", type=int, default=1000)
     parser.add_argument("--test_samples", type=int, default=1000)
@@ -141,20 +179,40 @@ def main():
     parser.add_argument("--eval_only", action="store_true", help="Only evaluate (requires --ckpt)")
     parser.add_argument("--tolerance", type=float, default=0.04, help="Accuracy = frac within tolerance of target")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--best_ckpt", type=str, default="s4d_adding_best.pt",
+                        help="Path to save the best checkpoint during training.")
     parser.add_argument("--save_results", type=str, default="s4d_adding_results.json",
                         help="Path to save test results JSON (set empty to disable)")
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=("auto", "cuda", "cpu"),
+        help="Training/eval device. 'auto' uses CUDA if available, else CPU.",
+    )
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == "auto":
+        selected_device = "cuda" if torch.cuda.is_available() else "cpu"
+    elif args.device == "cuda" and not torch.cuda.is_available():
+        raise SystemExit("Requested --device cuda, but CUDA is not available.")
+    else:
+        selected_device = args.device
+    device = torch.device(selected_device)
     torch.manual_seed(args.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
+    print(f"Using device: {device}")
 
     # Data (LRA-style fixed seeds per split)
     train_ds = AddingDataset(args.train_samples, args.seq_len, seed=args.seed)
     val_ds   = AddingDataset(args.val_samples,   args.seq_len, seed=args.seed + 1)
     test_ds  = AddingDataset(args.test_samples,  args.seq_len, seed=args.seed + 2)
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
-    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False)
-    test_loader  = DataLoader(test_ds,  batch_size=args.batch_size, shuffle=False)
+    # pin_memory improves host->GPU transfer throughput when CUDA is active.
+    loader_kwargs = {"pin_memory": device.type == "cuda"}
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, **loader_kwargs)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, **loader_kwargs)
+    test_loader  = DataLoader(test_ds,  batch_size=args.batch_size, shuffle=False, **loader_kwargs)
 
     # If a checkpoint is provided, try to infer d_model/d_state from it to avoid shape mismatch.
     ckpt_state = None
@@ -181,6 +239,8 @@ def main():
         d_state=args.d_state,
         seq_len=args.seq_len,
         dropout=args.dropout,
+        glu_mode=args.glu_mode,
+        gelu_mode=args.gelu_mode,
     ).to(device)
 
     # Load checkpoint if provided
@@ -188,7 +248,7 @@ def main():
         state = ckpt_state
         # If keys look like full AddingModel (has 'encoder'), load fully
         if any(k.startswith("encoder") for k in state.keys()):
-            model.load_state_dict(state, strict=True)
+            model.load_state_dict(state, strict=False)
             print("Loaded full AddingModel from checkpoint.")
         else:
             # Assume MiniS4D state_dict: load into s4d submodule
@@ -199,7 +259,9 @@ def main():
         if not args.ckpt:
             raise SystemExit("--eval_only requires --ckpt")
         test_mse, test_acc = evaluate(model, test_loader, device, args.tolerance)
+        pre_gate_range = measure_pre_gate_range(model, test_loader, device)
         print(f"Test MSE: {test_mse:.6f}  Acc (|pred-target|<{args.tolerance}): {test_acc*100:.2f}%")
+        print(f"Pre-gate range: [{pre_gate_range['min']:.6f}, {pre_gate_range['max']:.6f}]")
         if args.save_results:
             info = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -209,6 +271,8 @@ def main():
                 "d_model": args.d_model,
                 "d_state": args.d_state,
                 "dropout": args.dropout,
+                "glu_mode": args.glu_mode,
+                "gelu_mode": args.gelu_mode,
                 "train_samples": args.train_samples,
                 "val_samples": args.val_samples,
                 "test_samples": args.test_samples,
@@ -223,6 +287,7 @@ def main():
                 "uses_training_data_for_test": False,
                 "test_mse": test_mse,
                 "test_acc": test_acc,
+                "pre_gate_range": pre_gate_range,
             }
             save_results(args.save_results, info)
             print(f"Saved results to {args.save_results}")
@@ -236,21 +301,25 @@ def main():
         val_mse, val_acc = evaluate(model, val_loader, device, args.tolerance)
         if val_mse < best_val_mse:
             best_val_mse = val_mse
-            torch.save(model.state_dict(), "s4d_adding_best.pt")
+            torch.save(model.state_dict(), args.best_ckpt)
         print(f"Epoch {epoch+1}/{args.epochs}  train_loss={train_loss:.6f}  val_mse={val_mse:.6f}  val_acc={val_acc*100:.2f}%")
 
-    model.load_state_dict(torch.load("s4d_adding_best.pt", map_location=device))
+    model.load_state_dict(torch.load(args.best_ckpt, map_location=device))
     test_mse, test_acc = evaluate(model, test_loader, device, args.tolerance)
+    pre_gate_range = measure_pre_gate_range(model, test_loader, device)
     print(f"Test MSE: {test_mse:.6f}  Acc (|pred-target|<{args.tolerance}): {test_acc*100:.2f}%")
+    print(f"Pre-gate range: [{pre_gate_range['min']:.6f}, {pre_gate_range['max']:.6f}]")
     if args.save_results:
         info = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": "train_and_eval",
-            "ckpt": "s4d_adding_best.pt",
+            "ckpt": args.best_ckpt,
             "seq_len": args.seq_len,
             "d_model": args.d_model,
             "d_state": args.d_state,
             "dropout": args.dropout,
+            "glu_mode": args.glu_mode,
+            "gelu_mode": args.gelu_mode,
             "train_samples": args.train_samples,
             "val_samples": args.val_samples,
             "test_samples": args.test_samples,
@@ -267,6 +336,7 @@ def main():
             "uses_training_data_for_test": False,
             "test_mse": test_mse,
             "test_acc": test_acc,
+            "pre_gate_range": pre_gate_range,
         }
         save_results(args.save_results, info)
         print(f"Saved results to {args.save_results}")
