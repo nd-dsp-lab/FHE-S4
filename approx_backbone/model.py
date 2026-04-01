@@ -254,8 +254,10 @@ def resolve_checkpoint(path_str: str | None = None) -> Path:
     candidates.extend(
         [
             Path(DEFAULT_CHECKPOINT),
+            Path("approx_backbone") / "checkpoints" / DEFAULT_CHECKPOINT,
             Path("s4d") / DEFAULT_CHECKPOINT,
             Path("s4d_best_linear_gate.pt"),
+            Path("approx_backbone") / "checkpoints" / "s4d_best_linear_gate.pt",
         ]
     )
     for path in candidates:
