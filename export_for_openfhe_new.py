@@ -12,7 +12,7 @@ from run_inference_fhe_shell_new import (
 )
 
 try:
-    from s4d.model import MiniS4D  # type: ignore
+    from approx_backbone.model import ApproxMiniS4D  # type: ignore
 except Exception:
     from train_mini_s4d import MiniS4D
 
@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         default=16,
         help="Number of kernel taps to use in Toeplitz op (<= seq_len).",
     )
-    parser.add_argument("--out", type=str, default="toeplitz_test_data.json")
+    parser.add_argument("--out", type=str, default="forward_pass_data.json")
     return parser.parse_args()
 
 
@@ -49,12 +49,12 @@ def main() -> None:
     x_np = np.random.randn(seq_len, d_model).astype(np.float64)
     x_torch = torch.from_numpy(x_np.astype(np.float32)).transpose(0, 1).unsqueeze(0).to(device)
 
-    model = MiniS4D(d_model=d_model, L=seq_len, dropout=0.0).to(device)
+    model = ApproxMiniS4D(d_model=d_model, L=seq_len, dropout=0.0).to(device)
     model.eval()
 
     # Extract GELU coefficients
     gelu_module = model.activation
-    cheb_coeffs = gelu_module.poly6_coeffs.detatch().cpu().numpy()
+    cheb_coeffs = gelu_module.poly6_coeffs.detach().cpu().numpy()
     gelu_domain = gelu_module.gelu_domain
 
     # Extract kernel and pack

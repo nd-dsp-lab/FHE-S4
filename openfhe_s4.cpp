@@ -139,7 +139,7 @@ TestData ParseTestData(const string& filename) {
 
 
 int main(int argc, char* argv[]) {
-    string filename = "toeplitz_test_data.json";
+    string filename = "forward_pass_data.json";
     if (argc > 1) {
         filename = argv[1];
     }
@@ -281,11 +281,12 @@ int main(int argc, char* argv[]) {
         Plaintext p_c0 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[0]));
         Plaintext p_c1 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[1]));
         Plaintext p_neg_1 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, -1.0));
-        auto T_prev2 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0)); // T0
+        //auto T_prev2 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0)); // T0
+        auto T_prev2 = cc->Encrypt(keyPair.publicKey, cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0)));
         auto T_prev1 = ctxt_t; // T1
         // result = c0*T0 + c1*T1
-        auto term0 = cc->EvalMultPlaintext(T_prev2, p_c0); // c0*T0
-        auto term1 = cc->EvalMultPlaintext(T_prev1, p_c1); // c1*T1
+        auto term0 = cc->EvalMult(T_prev2, p_c0); // c0*T0
+        auto term1 = cc->EvalMult(T_prev1, p_c1); // c1*T1
         ctxt_act[c] = cc->EvalAdd(term0, term1);
 
         // loop for higher degree terms
@@ -293,16 +294,16 @@ int main(int argc, char* argv[]) {
             // Tn = 2*t*T_{n-1} - T_{n-2}
             auto t_mult = cc->EvalMult(ctxt_t, T_prev1);
             Plaintext p_two = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 2.0));
-            t_mult = cc->EvalMultPlaintext(t_mult, p_two);
+            t_mult = cc->EvalMult(t_mult, p_two);
             
             // make T_prev2 negative
-            auto neg_Tprev2 = cc->EvalMultPlaintext(T_prev2, p_neg_1);
+            auto neg_T_prev2 = cc->EvalMult(T_prev2, p_neg_1);
             auto Tn = cc->EvalAdd(t_mult, neg_T_prev2);
 
             // accumulate the polynomial c_i * Tn
             Plaintext p_ci = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[i]));
-            auto term = cc->EvalMultPlaintext(Tn, p_ci);
-            ctxt_act[c] = cc->EvalAdd(ctxt_act[i], term);
+            auto term = cc->EvalMult(Tn, p_ci);
+            ctxt_act[c] = cc->EvalAdd(ctxt_act[c], term);
 
             // shift T_prev1, T_prev2
             T_prev2 = T_prev1;
@@ -323,12 +324,12 @@ int main(int argc, char* argv[]) {
         Plaintext ptxt_conv_bias = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.conv_bias[i]));
 
         // multiply the post-gelu ciphertext for first term
-        ctxt_pre_gate[i] = cc->EvalMultPlaintext(ctxt_act[0], ptxt_conv_w0);
+        ctxt_pre_gate[i] = cc->EvalMult(ctxt_act[0], ptxt_conv_w0);
 
         // Sum over channels
         for (int j = 1; j < data.d_model; ++j) {
             Plaintext ptxt_conv_w = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.conv_weight[i][j]));
-            auto tmp = cc->EvalMultPlaintext(ctxt_act[j], ptxt_conv_w);
+            auto tmp = cc->EvalMult(ctxt_act[j], ptxt_conv_w);
             ctxt_pre_gate[i] = cc->EvalAdd(ctxt_pre_gate[i], tmp);
         }
         // add bias
@@ -345,7 +346,7 @@ int main(int argc, char* argv[]) {
     Plaintext p_05  = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 0.5));
     for (int c = 0; c < data.d_model; ++c) {
         // clamp
-        Ciphertext<DCRTPoly> gate = cc->EvalMultPlaintext(b_enc[c], p_025); // 0.25 * b
+        Ciphertext<DCRTPoly> gate = cc->EvalMult(b_enc[c], p_025); // 0.25 * b
         gate = cc->EvalAdd(gate, p_05); // 0.25 * b + 0.5 
 
         // TODO: clamp here
