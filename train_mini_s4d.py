@@ -257,20 +257,25 @@ class MiniS4D(nn.Module):
 
         else:
             T = block_diag(*[self.export_toeplitz(h) for h in range(self.d_model)])
-            # ERROR: need Galois keys for rotation -- way to avoid?
+            # Encrypted linear stage: Toeplitz + skip.
             y = u.matmul(T.tolist())
             y = y + (u * self.D.detach().cpu().numpy().repeat(self.L).tolist())
 
+            # Hybrid boundary: decrypt before deep non-linear/output stack.
+            # This avoids CKKS level exhaustion errors (e.g., DropLastElement)
+            # from fully encrypted GLU/output attempts.
             y_plain = torch.tensor(y.decrypt())
             y_activated = self.activation(y_plain)
-            y = tenseal.ckks_vector(context, y_activated.tolist())
+            y_plain = y_activated.reshape(self.d_model, self.L)
 
-            conv_weight = self.output_linear[0].weight.detach().cpu().squeeze(-1).numpy().T()
-            conv_bias = self.output_linear[0].bias.detach().cpu().numpy().tolist()
-            # ERROR: shapes of y and conv_weight don't match -- where is the disparity??
-            y = y.matmul(conv_weight.tolist()) + conv_bias
-
-            y_plain = torch.tensor(y.decrypt(), dtype=torch.float64).reshape(2 * self.d_model, self.L)
+            # Run Conv1d + GLU in plaintext for now (hybrid path).
+            conv_weight = self.output_linear[0].weight.detach().cpu()
+            conv_bias = self.output_linear[0].bias.detach().cpu()
+            y_plain = torch.nn.functional.conv1d(
+                y_plain.unsqueeze(0).to(dtype=conv_weight.dtype),
+                conv_weight,
+                bias=conv_bias,
+            ).squeeze(0).to(dtype=torch.float64)
             y_plain = apply_glu_mode(
                 y_plain,
                 glu_mode=self.glu_mode,
@@ -279,7 +284,7 @@ class MiniS4D(nn.Module):
                 poly6_coeffs=self.output_linear[1].poly6_coeffs.to(dtype=y_plain.dtype),
             )
             y_plain = y_plain.reshape(self.d_model, self.L)
-            out_plain = self.decoder(y_plain.mean(dim=-1))
+            out_plain = self.decoder(y_plain.mean(dim=-1).to(dtype=self.decoder.weight.dtype))
             out = tenseal.ckks_vector(context, out_plain.detach().flatten().tolist())
             return out
 
