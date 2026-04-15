@@ -90,13 +90,11 @@ TestData ParseTestData(const string& filename) {
             else if (in_gelu_cheb) in_gelu_cheb = false;
             else if (in_conv_bias) in_conv_bias = false;
             else if (in_conv_weight) {
-                if (in_conv_weight && line.find("]") != string::npos) {
-                    if (!current_conv_row.empty()) {
-                        data.conv_weight.push_back(current_conv_row);
-                        current_conv_row.clear();
-                    } else {
-                        in_conv_weight = false;
-                    }
+                if (!current_conv_row.empty()) {
+                    data.conv_weight.push_back(current_conv_row);
+                    current_conv_row.clear();
+                } else {
+                    in_conv_weight = false;
                 }
             }
             else if (in_dec_wt) in_dec_wt = false;
@@ -252,7 +250,7 @@ int main(int argc, char* argv[]) {
         //phase1_max_err = max(phase1_max_err, max_err);
         //cout << "[phase1] channel=" << c << " skip_max_abs_diff=" << scientific << max_err << endl;
     }
-    //cout << "[phase1] overall_skip_max_abs_diff=" << scientific << phase1_max_err << endl;
+    cout << "[phase1] complete" << endl;
 
 
     // ==========================================
@@ -264,58 +262,34 @@ int main(int argc, char* argv[]) {
     double hi = data.gelu_domain[1];
     double alpha = 2.0 / (hi - lo);
     double beta = -(hi + lo) / (hi - lo);
-    // prepare for pt-ct multiplication
-    Plaintext p_alpha = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, alpha));
-    Plaintext p_beta = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, beta));
 
+    // use EvalChebyshevSeries over each channel
+    auto& cheb_coeffs = data.gelu_cheb;
     vector<Ciphertext<DCRTPoly>> ctxt_act(data.d_model);
-
     for (int c = 0; c < data.d_model; ++c) {
-        // t = alpha * x + beta
-        auto ctxt_t = cc->EvalMult(ctxt_y_all[c], p_alpha);
-        ctxt_t = cc->EvalAdd(ctxt_t, p_beta);
-        
-        // compute Chebyshev recurrence for poly-6
-        auto& cheb_coeffs = data.gelu_cheb;
-        // Get first few terms
-        Plaintext p_c0 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[0]));
-        Plaintext p_c1 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[1]));
-        Plaintext p_neg_1 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, -1.0));
-        //auto T_prev2 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0)); // T0
-        auto T_prev2 = cc->Encrypt(keyPair.publicKey, cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0)));
-        auto T_prev1 = ctxt_t; // T1
-        // result = c0*T0 + c1*T1
-        auto term0 = cc->EvalMult(T_prev2, p_c0); // c0*T0
-        auto term1 = cc->EvalMult(T_prev1, p_c1); // c1*T1
-        ctxt_act[c] = cc->EvalAdd(term0, term1);
-
-        // loop for higher degree terms
-        for (int i = 2; i < cheb_coeffs.size(); ++i) {
-            // Tn = 2*t*T_{n-1} - T_{n-2}
-            auto t_mult = cc->EvalMult(ctxt_t, T_prev1);
-            Plaintext p_two = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 2.0));
-            t_mult = cc->EvalMult(t_mult, p_two);
-            
-            // make T_prev2 negative
-            auto neg_T_prev2 = cc->EvalMult(T_prev2, p_neg_1);
-            auto Tn = cc->EvalAdd(t_mult, neg_T_prev2);
-
-            // accumulate the polynomial c_i * Tn
-            Plaintext p_ci = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, cheb_coeffs[i]));
-            auto term = cc->EvalMult(Tn, p_ci);
-            ctxt_act[c] = cc->EvalAdd(ctxt_act[c], term);
-
-            // shift T_prev1, T_prev2
-            T_prev2 = T_prev1;
-            T_prev1 = Tn;
-        }
+        ctxt_act[c] = cc->EvalChebyshevSeries(ctxt_y_all[c], cheb_coeffs, alpha, beta);
     }
+
+    cout << "[phase2] complete" << endl;
+
     
     // ==========================================
     // PHASE 2.5: CONV LAYER AND GLU
     // ==========================================
     // apply convolution by over convolution dimesions d_model and 2*d_model (from Python)
-    
+    if (data.conv_weight.size() != 2 * data.d_model) {
+        cerr << "conv_weight row mismatch: got " << data.conv_weight.size() << ", expected " << 2 * data.d_model << endl;
+        exit(1);
+    }
+
+    for (size_t i = 0; i < data.conv_weight.size(); ++i) {
+        if (data.conv_weight[i].size() != data.d_model) {
+            cerr << "conv_weight[" << i << "] size mismatch: got " << data.conv_weight[i].size() << ", expected " << data.d_model << endl;
+            exit(1);
+        }
+    }
+
+
     vector<Ciphertext<DCRTPoly>> ctxt_pre_gate(2*data.d_model);
     // loop over convolution channels
     for (int i = 0; i < 2*data.d_model; ++i) {
@@ -335,6 +309,7 @@ int main(int argc, char* argv[]) {
         // add bias
         ctxt_pre_gate[i] = cc->EvalAdd(ctxt_pre_gate[i], ptxt_conv_bias);
     }
+    cout << "[conv] complete" << endl;
     
     // GLU
     // split into a and b
@@ -354,6 +329,7 @@ int main(int argc, char* argv[]) {
         // use the gate
         ctxt_gated[c] = cc->EvalMult(a_enc[c], gate);
     }
+    cout << "[glu] complete" << endl;
 
 
     // ==========================================
