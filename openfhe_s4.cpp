@@ -1,9 +1,12 @@
 #include "pke/openfhe.h"
+#include <algorithm>
+#include <exception>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <cmath>
 #include <chrono>
+#include <nlohmann/json.hpp>
 
 using namespace lbcrypto;
 using namespace std;
@@ -33,105 +36,58 @@ struct TestData {
 
 // Simple JSON parser for the specific output format of the python export script
 TestData ParseTestData(const string& filename) {
-    TestData data;
     ifstream file(filename);
     if (!file.is_open()) {
         cerr << "Failed to open " << filename << endl;
         exit(1);
     }
-    
-    string line;
-    ChannelData current_channel;
-    bool in_x = false;
-    bool in_coeffs = false;
-    bool in_skip = false;
-    bool in_act = false;
-    bool in_dec_wt = false;
-    bool in_gelu_domain = false;
-    bool in_gelu_cheb = false;
-    bool in_conv_weight = false;
-    bool in_conv_bias = false;
 
-    vector<double> current_conv_row;
-    
-    while (getline(file, line)) {
-        if (line.find("\"seq_len\":") != string::npos) {
-            data.seq_len = stoi(line.substr(line.find(":") + 1));
-        } else if (line.find("\"d_model\":") != string::npos) {
-            data.d_model = stoi(line.substr(line.find(":") + 1));
-        } else if (line.find("\"toeplitz_K\":") != string::npos) {
-            data.toeplitz_K = stoi(line.substr(line.find(":") + 1));
-        } else if (line.find("\"decoder_bias\":") != string::npos) {
-            data.decoder_bias = stod(line.substr(line.find(":") + 1));
-        } else if (line.find("\"out_expected\":") != string::npos) {
-            data.out_expected = stod(line.substr(line.find(":") + 1));
-        } else if (line.find("\"D\":") != string::npos) {
-            current_channel.D = stod(line.substr(line.find(":") + 1));
-        } else if (line.find("\"decoder_weight\": [") != string::npos) {
-            in_dec_wt = true;
-        } else if (line.find("\"x\": [") != string::npos) {
-            in_x = true;
-        } else if (line.find("\"coeffs\": [") != string::npos) {
-            in_coeffs = true;
-        } else if (line.find("\"y_skip_expected\": [") != string::npos) {
-            in_skip = true;
-        } else if (line.find("\"y_act\": [") != string::npos) {
-            in_act = true;
-        } else if (line.find("\"gelu_domain\": [") != string::npos) {
-            in_gelu_domain = true;
-        } else if (line.find("\"gelu_cheb\": [") != string::npos) {
-            in_gelu_cheb = true;
-        } else if (line.find("\"conv_weight\": [") != string::npos) {
-            in_conv_weight = true;
-        } else if (line.find("\"conv_bias\": [") != string::npos) {
-            in_conv_bias = true;
-        } else if (line.find("]") != string::npos) {
-            if (in_gelu_domain) in_gelu_domain = false;
-            else if (in_gelu_cheb) in_gelu_cheb = false;
-            else if (in_conv_bias) in_conv_bias = false;
-            else if (in_conv_weight) {
-                if (!current_conv_row.empty()) {
-                    data.conv_weight.push_back(current_conv_row);
-                    current_conv_row.clear();
-                } else {
-                    in_conv_weight = false;
-                }
-            }
-            else if (in_dec_wt) in_dec_wt = false;
-            else if (in_x) in_x = false;
-            else if (in_coeffs) in_coeffs = false;
-            else if (in_skip) in_skip = false;
-            else if (in_act) {
-                in_act = false;
-                data.channels.push_back(current_channel);
-                current_channel = ChannelData(); // Reset
-            }
-        } else if (in_x || in_coeffs || in_skip || in_act || in_dec_wt) {
-            // trim comma
-            if (line.back() == ',') line.pop_back();
-            double val = stod(line);
-            if (in_x) current_channel.x.push_back(val);
-            else if (in_coeffs) current_channel.coeffs.push_back(val);
-            else if (in_skip) current_channel.y_skip_expected.push_back(val);
-            else if (in_act) current_channel.y_act.push_back(val);
-            else if (in_dec_wt) data.decoder_weight.push_back(val);
-        } else if (in_gelu_domain || in_gelu_cheb || in_conv_weight || in_conv_bias) {
-            if (line.back() == ',') line.pop_back();
-
-            // handle row boundaries for conv_weight
-            if (line.find("[") != string::npos) {
-                current_conv_row.clear();
-                continue;
-            }
-
-            double val = stod(line);
-
-            if (in_gelu_domain) data.gelu_domain.push_back(val);
-            else if (in_gelu_cheb) data.gelu_cheb.push_back(val);
-            else if (in_conv_bias) data.conv_bias.push_back(val);
-            else if (in_conv_weight) current_conv_row.push_back(val);
-        }
+    nlohmann::json root;
+    try {
+        file >> root;
+    } catch (const nlohmann::json::exception& e) {
+        cerr << "Invalid JSON in " << filename << ": " << e.what() << endl;
+        exit(1);
     }
+
+    TestData data;
+    try {
+        data.seq_len = root.at("seq_len").get<int>();
+        data.d_model = root.at("d_model").get<int>();
+        data.toeplitz_K = root.at("toeplitz_K").get<int>();
+        data.decoder_weight = root.at("decoder_weight").get<vector<double>>();
+        data.decoder_bias = root.at("decoder_bias").get<double>();
+        data.out_expected = root.at("out_expected").get<double>();
+        data.gelu_domain = root.at("gelu_domain").get<vector<double>>();
+        data.gelu_cheb = root.at("gelu_cheb").get<vector<double>>();
+        data.conv_weight = root.at("conv_weight").get<vector<vector<double>>>();
+
+        const auto& conv_bias_json = root.at("conv_bias");
+        if (conv_bias_json.is_array()) {
+            data.conv_bias = conv_bias_json.get<vector<double>>();
+        } else {
+            // Backward-compatible fallback for old exports that wrote scalar conv_bias.
+            data.conv_bias = {conv_bias_json.get<double>()};
+        }
+
+        const auto& channels_json = root.at("channels");
+        if (!channels_json.is_array()) {
+            throw runtime_error("\"channels\" must be a JSON array");
+        }
+        for (const auto& channel_json : channels_json) {
+            ChannelData channel;
+            channel.x = channel_json.at("x").get<vector<double>>();
+            channel.coeffs = channel_json.at("coeffs").get<vector<double>>();
+            channel.D = channel_json.at("D").get<double>();
+            channel.y_skip_expected = channel_json.at("y_skip_expected").get<vector<double>>();
+            channel.y_act = channel_json.at("y_act").get<vector<double>>();
+            data.channels.push_back(std::move(channel));
+        }
+    } catch (const exception& e) {
+        cerr << "JSON schema mismatch in " << filename << ": " << e.what() << endl;
+        exit(1);
+    }
+
     return data;
 }
 
@@ -145,10 +101,21 @@ int main(int argc, char* argv[]) {
     TestData data = ParseTestData(filename);
     cout << "Loaded test data:" << endl;
     cout << "seq_len: " << data.seq_len << ", d_model: " << data.d_model << ", toeplitz_K: " << data.toeplitz_K << endl;
+
+    if (data.channels.size() != static_cast<size_t>(data.d_model)) {
+        cerr << "channel count mismatch: got " << data.channels.size()
+             << ", expected " << data.d_model << endl;
+        return 1;
+    }
+    if (data.conv_bias.size() != static_cast<size_t>(2 * data.d_model)) {
+        cerr << "conv_bias size mismatch: got " << data.conv_bias.size()
+             << ", expected " << 2 * data.d_model << endl;
+        return 1;
+    }
     
     // 1. Setup OpenFHE Context
     auto t_start = chrono::high_resolution_clock::now();
-    uint32_t multDepth = 5;      // Needs higher depth for sum and multiple mults
+    uint32_t multDepth = 10;     // Toeplitz + degree-6 GELU + conv/GLU + decoder
     uint32_t scaleModSize = 50;  // 50-bit for higher precision in deeper circuits
     uint32_t firstModSize = 60;
     uint32_t ringDim = 8192;

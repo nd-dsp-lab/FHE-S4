@@ -88,8 +88,11 @@ def main() -> None:
     decoder_weight = model.decoder.weight.detach().cpu().numpy()[0].astype(np.float64).tolist()
     decoder_bias = float(model.decoder.bias.detach().cpu().numpy()[0])
 
-    conv_weight = model.output_linear[0].weight.detach().cpu().numpy()[0].astype(np.float64).tolist()
-    conv_bias = float(model.output_linear[0].bias.detach().cpu().numpy()[0])
+    conv_layer = model.output_linear[0]
+    # Conv1d weight shape is (out_channels, in_channels, kernel_size=1).
+    # Export as a 2D matrix so C++ can apply channel mixing explicitly.
+    conv_weight = conv_layer.weight.detach().cpu().numpy()[:, :, 0].astype(np.float64).tolist()
+    conv_bias = conv_layer.bias.detach().cpu().numpy().astype(np.float64).tolist()
 
     # Save to JSON
     export_data = {
