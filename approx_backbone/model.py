@@ -71,6 +71,7 @@ class SelectableGELU(nn.Module):
     def __init__(self, gelu_mode: str = DEFAULT_GELU_MODE):
         super().__init__()
         self.gelu_mode = gelu_mode
+        self.gelu_domain = GELU_DOMAIN
         self.register_buffer("poly4_coeffs", torch.tensor(POLY4_GELU_CHEB, dtype=torch.float32))
         self.register_buffer("poly6_coeffs", torch.tensor(POLY6_GELU_CHEB, dtype=torch.float32))
 
