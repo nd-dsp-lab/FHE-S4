@@ -115,10 +115,10 @@ int main(int argc, char* argv[]) {
     
     // 1. Setup OpenFHE Context
     auto t_start = chrono::high_resolution_clock::now();
-    uint32_t multDepth = 10;     // Toeplitz + degree-6 GELU + conv/GLU + decoder
-    uint32_t scaleModSize = 50;  // 50-bit for higher precision in deeper circuits
+    uint32_t multDepth = 13;     // Extra headroom for GELU poly + GLU + decoder.
+    uint32_t scaleModSize = 59;  // Larger scale for better post-chain decode precision.
     uint32_t firstModSize = 60;
-    uint32_t ringDim = 8192;
+    uint32_t ringDim = 16384;    // More modulus capacity for deeper CKKS chains.
     uint32_t batchSize = data.seq_len;
     
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -151,6 +151,36 @@ int main(int argc, char* argv[]) {
     
     auto t_end = chrono::high_resolution_clock::now();
     cout << "[fhe] context_creation_time_s=" << chrono::duration<double>(t_end - t_start).count() << endl;
+    cout << "[fhe] params multDepth=" << multDepth
+         << " scaleModSize=" << scaleModSize
+         << " firstModSize=" << firstModSize
+         << " ringDim=" << ringDim
+         << " batchSize=" << batchSize << endl;
+
+    auto probeDecrypt = [&](const string& tag, const Ciphertext<DCRTPoly>& ct, size_t outLen) {
+        try {
+            Plaintext p;
+            cc->Decrypt(keyPair.secretKey, ct, &p);
+            p->SetLength(outLen);
+            auto v = p->GetRealPackedValue();
+            double minv = v.empty() ? 0.0 : v[0];
+            double maxv = v.empty() ? 0.0 : v[0];
+            for (double val : v) {
+                minv = min(minv, val);
+                maxv = max(maxv, val);
+            }
+            double first0 = v.empty() ? 0.0 : v[0];
+            double first1 = v.size() > 1 ? v[1] : first0;
+            cout << "[probe] " << tag
+                 << " ok len=" << v.size()
+                 << " min=" << scientific << minv
+                 << " max=" << scientific << maxv
+                 << " first2={" << first0 << ", " << first1 << "}" << endl;
+        } catch (const exception& e) {
+            cerr << "[probe] " << tag << " decrypt_failed: " << e.what() << endl;
+            throw;
+        }
+    };
     
     double phase1_max_err = 0.0;
     
@@ -224,17 +254,16 @@ int main(int argc, char* argv[]) {
     // PHASE 2: NON-LINEAR ACTIVATION
     // ==========================================
     // The model has been trained in linear approximations of GELU
-    // compute normalized input t using json data
+    // EvalChebyshevSeries expects the original approximation interval [lo, hi].
     double lo = data.gelu_domain[0];
     double hi = data.gelu_domain[1];
-    double alpha = 2.0 / (hi - lo);
-    double beta = -(hi + lo) / (hi - lo);
 
     // use EvalChebyshevSeries over each channel
     auto& cheb_coeffs = data.gelu_cheb;
     vector<Ciphertext<DCRTPoly>> ctxt_act(data.d_model);
     for (int c = 0; c < data.d_model; ++c) {
-        ctxt_act[c] = cc->EvalChebyshevSeries(ctxt_y_all[c], cheb_coeffs, alpha, beta);
+        ctxt_act[c] = cc->EvalChebyshevSeries(ctxt_y_all[c], cheb_coeffs, lo, hi);
+        probeDecrypt("phase2/act[c=" + to_string(c) + "]", ctxt_act[c], batchSize);
     }
 
     cout << "[phase2] complete" << endl;
@@ -275,6 +304,7 @@ int main(int argc, char* argv[]) {
         }
         // add bias
         ctxt_pre_gate[i] = cc->EvalAdd(ctxt_pre_gate[i], ptxt_conv_bias);
+        probeDecrypt("conv/pre_gate[i=" + to_string(i) + "]", ctxt_pre_gate[i], batchSize);
     }
     cout << "[conv] complete" << endl;
     
@@ -287,14 +317,25 @@ int main(int argc, char* argv[]) {
     Plaintext p_025 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 0.25));
     Plaintext p_05  = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 0.5));
     for (int c = 0; c < data.d_model; ++c) {
-        // clamp
+        // Build linearized gate in ciphertext space.
         Ciphertext<DCRTPoly> gate = cc->EvalMult(b_enc[c], p_025); // 0.25 * b
         gate = cc->EvalAdd(gate, p_05); // 0.25 * b + 0.5 
 
-        // TODO: clamp here
+        // Debug/interop path requested: decrypt, clamp in plaintext, then re-encrypt.
+        Plaintext ptxt_gate_pre_clamp;
+        cc->Decrypt(keyPair.secretKey, gate, &ptxt_gate_pre_clamp);
+        ptxt_gate_pre_clamp->SetLength(batchSize);
+        auto gate_values = ptxt_gate_pre_clamp->GetRealPackedValue();
+        for (auto& g : gate_values) {
+            g = clamp(g, 0.0, 1.0);
+        }
+        Plaintext ptxt_gate_clamped = cc->MakeCKKSPackedPlaintext(gate_values);
+        gate = cc->Encrypt(keyPair.publicKey, ptxt_gate_clamped);
 
         // use the gate
         ctxt_gated[c] = cc->EvalMult(a_enc[c], gate);
+        probeDecrypt("glu/gate[c=" + to_string(c) + "]", gate, batchSize);
+        probeDecrypt("glu/gated[c=" + to_string(c) + "]", ctxt_gated[c], batchSize);
     }
     cout << "[glu] complete" << endl;
 
@@ -322,6 +363,7 @@ int main(int argc, char* argv[]) {
         Ciphertext<DCRTPoly> ctxt_sum = cc->EvalSum(ctxt_gated[c], batchSize);
         Plaintext ptxt_div = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0 / data.seq_len));
         Ciphertext<DCRTPoly> ctxt_mean = cc->EvalMult(ctxt_sum, ptxt_div);
+        probeDecrypt("phase3/mean[c=" + to_string(c) + "]", ctxt_mean, batchSize);
         
         // Linear Decoder Weight Application
         Plaintext ptxt_w = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.decoder_weight[c]));
