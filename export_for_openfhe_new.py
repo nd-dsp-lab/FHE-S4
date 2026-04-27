@@ -62,6 +62,10 @@ def main() -> None:
     coeffs_by_channel = extract_channel_kernel_coeffs(model, seq_len, d_model, K)
     chans_plain = pack_per_channel(x_np)
 
+    # timing unencrypted:
+    t0 = time.perf_counter()
+
+
     # Phase 1: Toeplitz + Skip Connection
     y_conv_chans = [
         toeplitz_plain(chans_plain[c], coeffs_by_channel[c]) for c in range(d_model)
@@ -97,6 +101,11 @@ def main() -> None:
 
         y_hybrid_out = model.decoder(pooled)
         out_expected = float(y_hybrid_out.detach().cpu().numpy()[0, 0])
+
+
+        # end timing:
+        t1 = time.perf_counter()
+        unencrypted_forward_time = t1 - t0
 
     decoder_weight = model.decoder.weight.detach().cpu().numpy()[0].astype(np.float64).tolist()
     decoder_bias = float(model.decoder.bias.detach().cpu().numpy()[0])

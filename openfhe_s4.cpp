@@ -17,6 +17,9 @@ struct ChannelData {
     vector<double> coeffs;
     double D;
     vector<double> y_skip_expected;
+    vector<double> y_gelu_expected;
+    vector<double> pre_gate_a;
+    vector<double> pre_gate_b;
     vector<double> y_act;
 };
 
@@ -27,6 +30,7 @@ struct TestData {
     vector<double> decoder_weight;
     double decoder_bias;
     double out_expected;
+    double unencrypted_forward_time;
     vector<ChannelData> channels;
     vector<double> gelu_domain;
     vector<double> gelu_cheb;
@@ -63,6 +67,7 @@ TestData ParseTestData(const string& filename) {
         data.decoder_weight = root.at("decoder_weight").get<vector<double>>();
         data.decoder_bias = root.at("decoder_bias").get<double>();
         data.out_expected = root.at("out_expected").get<double>();
+        data.unencrypted_forward_time = root.at("unencrypted_forward_time").get<double>();
         data.gelu_domain = root.at("gelu_domain").get<vector<double>>();
         data.gelu_cheb = root.at("gelu_cheb").get<vector<double>>();
         data.conv_weight = root.at("conv_weight").get<vector<vector<double>>>();
@@ -90,6 +95,9 @@ TestData ParseTestData(const string& filename) {
             channel.coeffs = channel_json.at("coeffs").get<vector<double>>();
             channel.D = channel_json.at("D").get<double>();
             channel.y_skip_expected = channel_json.at("y_skip_expected").get<vector<double>>();
+            channel.y_gelu_expected = channel_json.at("y_gelu_expected").get<vector<double>>();
+            channel.pre_gate_a = channel_json.at("pre_gate_a").get<vector<double>>();
+            channel.pre_gate_b = channel_json.at("pre_gate_b").get<vector<double>>();
             channel.y_act = channel_json.at("y_act").get<vector<double>>();
             data.channels.push_back(std::move(channel));
         }
@@ -231,6 +239,9 @@ int main(int argc, char* argv[]) {
     // PHASE 1: FHE TOEPLITZ CONV + SKIP
     // ==========================================
     vector<Ciphertext<DCRTPoly>> ctxt_y_all(data.d_model);
+    // time:
+    auto t0_fhe = chrono::high_resolution_clock::now();
+
     for (int c = 0; c < data.d_model; ++c) {
         auto& chan = data.channels[c];
         
@@ -310,7 +321,6 @@ int main(int argc, char* argv[]) {
 
     cout << "[phase2] overall_post_gelu_max_abs_diff=" << scientific << phase2_max_err << endl;
     cout << "[phase2] complete" << endl;
-
     
     // ==========================================
     // PHASE 2.5: CONV LAYER AND GLU
@@ -475,6 +485,10 @@ int main(int argc, char* argv[]) {
     Plaintext ptxt_final;
     cc->Decrypt(keyPair.secretKey, ctxt_final_out, &ptxt_final);
     ptxt_final->SetLength(1); // The mean is copied across all slots, just read index 0.
+
+    // time 
+    auto t1_fhe = chrono::high_resolution_clock::now();
+    double fhe_time   = chrono::duration<double>(t1_fhe - t0_fhe).count();
     
     double final_decrypted = ptxt_final->GetRealPackedValue()[0];
     cout << "\n[phase3] OpenFHE Output: " << scientific << final_decrypted << endl;
