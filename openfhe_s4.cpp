@@ -32,6 +32,11 @@ struct TestData {
     vector<double> gelu_cheb;
     vector<vector<double>> conv_weight;
     vector<double> conv_bias;
+    vector<vector<double>> post_gelu;
+    vector<vector<double>> pre_gate;
+    vector<vector<double>> gate;
+    vector<vector<double>> gated;
+    vector<double> pooled;
 };
 
 // Simple JSON parser for the specific output format of the python export script
@@ -61,6 +66,11 @@ TestData ParseTestData(const string& filename) {
         data.gelu_domain = root.at("gelu_domain").get<vector<double>>();
         data.gelu_cheb = root.at("gelu_cheb").get<vector<double>>();
         data.conv_weight = root.at("conv_weight").get<vector<vector<double>>>();
+        data.post_gelu = root.at("post_gelu").get<vector<vector<double>>>();
+        data.pre_gate = root.at("pre_gate").get<vector<vector<double>>>();
+        data.gate = root.at("gate").get<vector<vector<double>>>();
+        data.gated = root.at("gated").get<vector<vector<double>>>();
+        data.pooled = root.at("pooled").get<vector<double>>();
 
         const auto& conv_bias_json = root.at("conv_bias");
         if (conv_bias_json.is_array()) {
@@ -91,6 +101,15 @@ TestData ParseTestData(const string& filename) {
     return data;
 }
 
+static double MaxAbsDiff(const vector<double>& a, const vector<double>& b) {
+    const size_t n = min(a.size(), b.size());
+    double max_err = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        max_err = max(max_err, abs(a[i] - b[i]));
+    }
+    return max_err;
+}
+
 
 int main(int argc, char* argv[]) {
     string filename = "forward_pass_data.json";
@@ -110,6 +129,14 @@ int main(int argc, char* argv[]) {
     if (data.conv_bias.size() != static_cast<size_t>(2 * data.d_model)) {
         cerr << "conv_bias size mismatch: got " << data.conv_bias.size()
              << ", expected " << 2 * data.d_model << endl;
+        return 1;
+    }
+    if (data.post_gelu.size() != static_cast<size_t>(data.d_model) ||
+        data.gate.size() != static_cast<size_t>(data.d_model) ||
+        data.gated.size() != static_cast<size_t>(data.d_model) ||
+        data.pooled.size() != static_cast<size_t>(data.d_model) ||
+        data.pre_gate.size() != static_cast<size_t>(2 * data.d_model)) {
+        cerr << "stage reference size mismatch in exported JSON" << endl;
         return 1;
     }
     
@@ -157,29 +184,45 @@ int main(int argc, char* argv[]) {
          << " ringDim=" << ringDim
          << " batchSize=" << batchSize << endl;
 
+    auto decryptVector = [&](const Ciphertext<DCRTPoly>& ct, size_t outLen) {
+        Plaintext p;
+        cc->Decrypt(keyPair.secretKey, ct, &p);
+        p->SetLength(outLen);
+        auto raw = p->GetRealPackedValue();
+        return vector<double>(raw.begin(), raw.end());
+    };
+
+    auto printProbe = [&](const string& tag, const vector<double>& v) {
+        double minv = v.empty() ? 0.0 : v[0];
+        double maxv = v.empty() ? 0.0 : v[0];
+        for (double val : v) {
+            minv = min(minv, val);
+            maxv = max(maxv, val);
+        }
+        double first0 = v.empty() ? 0.0 : v[0];
+        double first1 = v.size() > 1 ? v[1] : first0;
+        cout << "[probe] " << tag
+             << " ok len=" << v.size()
+             << " min=" << scientific << minv
+             << " max=" << scientific << maxv
+             << " first2={" << first0 << ", " << first1 << "}" << endl;
+    };
+
     auto probeDecrypt = [&](const string& tag, const Ciphertext<DCRTPoly>& ct, size_t outLen) {
         try {
-            Plaintext p;
-            cc->Decrypt(keyPair.secretKey, ct, &p);
-            p->SetLength(outLen);
-            auto v = p->GetRealPackedValue();
-            double minv = v.empty() ? 0.0 : v[0];
-            double maxv = v.empty() ? 0.0 : v[0];
-            for (double val : v) {
-                minv = min(minv, val);
-                maxv = max(maxv, val);
-            }
-            double first0 = v.empty() ? 0.0 : v[0];
-            double first1 = v.size() > 1 ? v[1] : first0;
-            cout << "[probe] " << tag
-                 << " ok len=" << v.size()
-                 << " min=" << scientific << minv
-                 << " max=" << scientific << maxv
-                 << " first2={" << first0 << ", " << first1 << "}" << endl;
+            vector<double> v = decryptVector(ct, outLen);
+            printProbe(tag, v);
+            return v;
         } catch (const exception& e) {
             cerr << "[probe] " << tag << " decrypt_failed: " << e.what() << endl;
             throw;
         }
+    };
+
+    auto compareStage = [&](const string& tag, const vector<double>& actual, const vector<double>& expected) {
+        double err = MaxAbsDiff(actual, expected);
+        cout << "[diff] " << tag << "_max_abs_diff=" << scientific << err << endl;
+        return err;
     };
     
     double phase1_max_err = 0.0;
@@ -234,19 +277,11 @@ int main(int argc, char* argv[]) {
         Ciphertext<DCRTPoly> ctxt_skip_term = cc->EvalMult(ctxt_x, ptxt_D);
         ctxt_y_all[c] = cc->EvalAdd(ctxt_y, ctxt_skip_term);
         
-        // --- PHASE 1 DECRYPT FOR VERIFICATION ---
-        //Plaintext ptxt_result;
-        //cc->Decrypt(keyPair.secretKey, ctxt_y, &ptxt_result);
-        //ptxt_result->SetLength(batchSize);
-        //auto dec_vec = ptxt_result->GetRealPackedValue();
-        
-        //double max_err = 0.0;
-        //for (size_t i = 0; i < batchSize; ++i) {
-        //    max_err = max(max_err, abs(dec_vec[i] - chan.y_skip_expected[i]));
-        //}
-        //phase1_max_err = max(phase1_max_err, max_err);
-        //cout << "[phase1] channel=" << c << " skip_max_abs_diff=" << scientific << max_err << endl;
+        vector<double> skip_dec = decryptVector(ctxt_y_all[c], batchSize);
+        double max_err = compareStage("phase1/skip[c=" + to_string(c) + "]", skip_dec, chan.y_skip_expected);
+        phase1_max_err = max(phase1_max_err, max_err);
     }
+    cout << "[phase1] overall_skip_max_abs_diff=" << scientific << phase1_max_err << endl;
     cout << "[phase1] complete" << endl;
 
 
@@ -258,14 +293,22 @@ int main(int argc, char* argv[]) {
     double lo = data.gelu_domain[0];
     double hi = data.gelu_domain[1];
 
-    // use EvalChebyshevSeries over each channel
-    auto& cheb_coeffs = data.gelu_cheb;
+    // OpenFHE's Chebyshev-series evaluator uses the conventional c0/2 term,
+    // while the PyTorch exporter stores coefficients for c0*T0 + c1*T1 + ...
+    vector<double> cheb_coeffs = data.gelu_cheb;
+    if (!cheb_coeffs.empty()) {
+        cheb_coeffs[0] *= 2.0;
+    }
     vector<Ciphertext<DCRTPoly>> ctxt_act(data.d_model);
+    double phase2_max_err = 0.0;
     for (int c = 0; c < data.d_model; ++c) {
         ctxt_act[c] = cc->EvalChebyshevSeries(ctxt_y_all[c], cheb_coeffs, lo, hi);
-        probeDecrypt("phase2/act[c=" + to_string(c) + "]", ctxt_act[c], batchSize);
+        vector<double> act_dec = probeDecrypt("phase2/post_gelu[c=" + to_string(c) + "]", ctxt_act[c], batchSize);
+        double err = compareStage("phase2/post_gelu[c=" + to_string(c) + "]", act_dec, data.post_gelu[c]);
+        phase2_max_err = max(phase2_max_err, err);
     }
 
+    cout << "[phase2] overall_post_gelu_max_abs_diff=" << scientific << phase2_max_err << endl;
     cout << "[phase2] complete" << endl;
 
     
@@ -287,6 +330,7 @@ int main(int argc, char* argv[]) {
 
 
     vector<Ciphertext<DCRTPoly>> ctxt_pre_gate(2*data.d_model);
+    double conv_max_err = 0.0;
     // loop over convolution channels
     for (int i = 0; i < 2*data.d_model; ++i) {
         // get weight and bias
@@ -304,8 +348,11 @@ int main(int argc, char* argv[]) {
         }
         // add bias
         ctxt_pre_gate[i] = cc->EvalAdd(ctxt_pre_gate[i], ptxt_conv_bias);
-        probeDecrypt("conv/pre_gate[i=" + to_string(i) + "]", ctxt_pre_gate[i], batchSize);
+        vector<double> pre_gate_dec = probeDecrypt("conv/pre_gate[i=" + to_string(i) + "]", ctxt_pre_gate[i], batchSize);
+        double err = compareStage("conv/pre_gate[i=" + to_string(i) + "]", pre_gate_dec, data.pre_gate[i]);
+        conv_max_err = max(conv_max_err, err);
     }
+    cout << "[conv] overall_pre_gate_max_abs_diff=" << scientific << conv_max_err << endl;
     cout << "[conv] complete" << endl;
     
     // GLU
@@ -316,6 +363,8 @@ int main(int argc, char* argv[]) {
     // gate each channel
     Plaintext p_025 = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 0.25));
     Plaintext p_05  = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 0.5));
+    double gate_max_err = 0.0;
+    double gated_max_err = 0.0;
     for (int c = 0; c < data.d_model; ++c) {
         // Build linearized gate in ciphertext space.
         Ciphertext<DCRTPoly> gate = cc->EvalMult(b_enc[c], p_025); // 0.25 * b
@@ -334,36 +383,77 @@ int main(int argc, char* argv[]) {
 
         // use the gate
         ctxt_gated[c] = cc->EvalMult(a_enc[c], gate);
-        probeDecrypt("glu/gate[c=" + to_string(c) + "]", gate, batchSize);
-        probeDecrypt("glu/gated[c=" + to_string(c) + "]", ctxt_gated[c], batchSize);
+        vector<double> gate_dec = probeDecrypt("glu/gate[c=" + to_string(c) + "]", gate, batchSize);
+        double gate_err = compareStage("glu/gate[c=" + to_string(c) + "]", gate_dec, data.gate[c]);
+        gate_max_err = max(gate_max_err, gate_err);
+        vector<double> gated_dec = probeDecrypt("glu/gated[c=" + to_string(c) + "]", ctxt_gated[c], batchSize);
+        double gated_err = compareStage("glu/gated[c=" + to_string(c) + "]", gated_dec, data.gated[c]);
+        gated_max_err = max(gated_max_err, gated_err);
     }
+    cout << "[glu] overall_gate_max_abs_diff=" << scientific << gate_max_err << endl;
+    cout << "[glu] overall_gated_max_abs_diff=" << scientific << gated_max_err << endl;
     cout << "[glu] complete" << endl;
 
 
     // ==========================================
     // PHASE 3: FHE MEAN REDUCTION AND DECODER
     // ==========================================
-    //////////////////////////////
-    // Check: dimensions of the weights/biases
-    //////////////////////////////
+    // First sanity-check the tail independently by re-encrypting the exported
+    // post-GLU tensor. If this path is clean, later errors came from earlier stages.
+    vector<Ciphertext<DCRTPoly>> ctxt_gated_ref(data.d_model);
+    for (int c = 0; c < data.d_model; ++c) {
+        Plaintext ptxt_gated_ref = cc->MakeCKKSPackedPlaintext(data.gated[c]);
+        ctxt_gated_ref[c] = cc->Encrypt(keyPair.publicKey, ptxt_gated_ref);
+    }
+
+    Ciphertext<DCRTPoly> ctxt_ref_final_out;
+    bool ref_first = true;
+    double ref_mean_max_err = 0.0;
+    for (int c = 0; c < data.d_model; ++c) {
+        Ciphertext<DCRTPoly> ctxt_sum = cc->EvalSum(ctxt_gated_ref[c], batchSize);
+        Plaintext ptxt_div = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0 / data.seq_len));
+        Ciphertext<DCRTPoly> ctxt_mean = cc->EvalMult(ctxt_sum, ptxt_div);
+        vector<double> mean_dec = probeDecrypt("phase3_ref/mean[c=" + to_string(c) + "]", ctxt_mean, batchSize);
+        vector<double> expected_mean(batchSize, data.pooled[c]);
+        double mean_err = compareStage("phase3_ref/mean[c=" + to_string(c) + "]", mean_dec, expected_mean);
+        ref_mean_max_err = max(ref_mean_max_err, mean_err);
+
+        Plaintext ptxt_w = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.decoder_weight[c]));
+        Ciphertext<DCRTPoly> ctxt_decoder_term = cc->EvalMult(ctxt_mean, ptxt_w);
+        if (ref_first) {
+            ctxt_ref_final_out = ctxt_decoder_term;
+            ref_first = false;
+        } else {
+            ctxt_ref_final_out = cc->EvalAdd(ctxt_ref_final_out, ctxt_decoder_term);
+        }
+    }
+    Plaintext ptxt_ref_bias = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.decoder_bias));
+    ctxt_ref_final_out = cc->EvalAdd(ctxt_ref_final_out, ptxt_ref_bias);
+    Plaintext ptxt_ref_final;
+    cc->Decrypt(keyPair.secretKey, ctxt_ref_final_out, &ptxt_ref_final);
+    ptxt_ref_final->SetLength(1);
+    double ref_decrypted = ptxt_ref_final->GetRealPackedValue()[0];
+    cout << "[phase3_ref] Output From Exported Gated: " << scientific << ref_decrypted << endl;
+    cout << "[phase3_ref] Expected Output: " << scientific << data.out_expected << endl;
+    cout << "[phase3_ref] Global Error: " << scientific << abs(ref_decrypted - data.out_expected) << endl;
+    cout << "[phase3_ref] Overall Mean Max Abs Diff: " << scientific << ref_mean_max_err << endl;
+
     Ciphertext<DCRTPoly> ctxt_final_out;
     bool first = true;
+    double phase3_mean_max_err = 0.0;
     
     // The Python code groups the final decoder after the `.mean(dim=-1)` reduction
     // So for each channel c, we summarize L elements.
     for (int c = 0; c < data.d_model; ++c) {
-        auto& chan = data.channels[c];
-        
-        // Re-encrypt the activated plaintext from Phase 2
-        //Plaintext ptxt_act = cc->MakeCKKSPackedPlaintext(chan.y_act);
-        //Ciphertext<DCRTPoly> ctxt_act = cc->Encrypt(keyPair.publicKey, ptxt_act);
-        
         // Mean reduction over L elements (EvalSum adds all elements, we mult by 1/L)
         // Note: EvalSum replaces all elements with the sum of the whole vector
         Ciphertext<DCRTPoly> ctxt_sum = cc->EvalSum(ctxt_gated[c], batchSize);
         Plaintext ptxt_div = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, 1.0 / data.seq_len));
         Ciphertext<DCRTPoly> ctxt_mean = cc->EvalMult(ctxt_sum, ptxt_div);
-        probeDecrypt("phase3/mean[c=" + to_string(c) + "]", ctxt_mean, batchSize);
+        vector<double> mean_dec = probeDecrypt("phase3/mean[c=" + to_string(c) + "]", ctxt_mean, batchSize);
+        vector<double> expected_mean(batchSize, data.pooled[c]);
+        double mean_err = compareStage("phase3/mean[c=" + to_string(c) + "]", mean_dec, expected_mean);
+        phase3_mean_max_err = max(phase3_mean_max_err, mean_err);
         
         // Linear Decoder Weight Application
         Plaintext ptxt_w = cc->MakeCKKSPackedPlaintext(vector<double>(batchSize, data.decoder_weight[c]));
@@ -390,6 +480,7 @@ int main(int argc, char* argv[]) {
     cout << "\n[phase3] OpenFHE Output: " << scientific << final_decrypted << endl;
     cout << "[phase3] Expected Output: " << scientific << data.out_expected << endl;
     cout << "[phase3] Global Error: " << scientific << abs(final_decrypted - data.out_expected) << endl;
+    cout << "[phase3] Overall Mean Max Abs Diff: " << scientific << phase3_mean_max_err << endl;
     
     return 0;
 }

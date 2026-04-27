@@ -72,17 +72,30 @@ def main() -> None:
         y_conv_chans[c] + chans_plain[c] * D[c] for c in range(d_model)
     ]
     
-    # Phase 2: Compute remaining non-linear components in PyTorch
+    # Phase 2: Compute remaining components in PyTorch and export every stage
+    # separately so the C++ debug path can compare like with like.
     y_skip_matrix = np.stack(y_skip_chans, axis=1) # (L, d_model)
     with torch.no_grad():
         y_torch = torch.from_numpy(y_skip_matrix.astype(np.float32)).transpose(0, 1).unsqueeze(0).to(device)
-        y_hybrid = model.dropout(model.activation(y_torch))
-        y_hybrid = model.output_linear(y_hybrid) # (1, d_model, L)
-        
-        y_act_np = y_hybrid.detach().cpu().numpy()[0].astype(np.float64) # (d_model, L)
-        y_act_chans = [y_act_np[c] for c in range(d_model)]
+        post_gelu = model.dropout(model.activation(y_torch))
+        pre_gate = model.output_linear[0](post_gelu) # (1, 2*d_model, L)
+        a, b = torch.chunk(pre_gate, 2, dim=-2)
+        gate = torch.clamp(0.25 * b + 0.5, 0.0, 1.0)
+        gated = a * gate
+        pooled = gated.mean(dim=-1)
 
-        y_hybrid_out = model.decoder(y_hybrid.mean(dim=-1))
+        post_gelu_np = post_gelu.detach().cpu().numpy()[0].astype(np.float64) # (d_model, L)
+        pre_gate_np = pre_gate.detach().cpu().numpy()[0].astype(np.float64) # (2*d_model, L)
+        gate_np = gate.detach().cpu().numpy()[0].astype(np.float64) # (d_model, L)
+        gated_np = gated.detach().cpu().numpy()[0].astype(np.float64) # (d_model, L)
+        pooled_np = pooled.detach().cpu().numpy()[0].astype(np.float64) # (d_model,)
+
+        post_gelu_chans = [post_gelu_np[c] for c in range(d_model)]
+        pre_gate_chans = [pre_gate_np[c] for c in range(2 * d_model)]
+        gate_chans = [gate_np[c] for c in range(d_model)]
+        gated_chans = [gated_np[c] for c in range(d_model)]
+
+        y_hybrid_out = model.decoder(pooled)
         out_expected = float(y_hybrid_out.detach().cpu().numpy()[0, 0])
 
     decoder_weight = model.decoder.weight.detach().cpu().numpy()[0].astype(np.float64).tolist()
@@ -106,6 +119,11 @@ def main() -> None:
         "decoder_weight": decoder_weight,
         "decoder_bias": decoder_bias,
         "out_expected": out_expected,
+        "post_gelu": [v.tolist() for v in post_gelu_chans],
+        "pre_gate": [v.tolist() for v in pre_gate_chans],
+        "gate": [v.tolist() for v in gate_chans],
+        "gated": [v.tolist() for v in gated_chans],
+        "pooled": pooled_np.tolist(),
         "channels": []
     }
 
@@ -115,7 +133,7 @@ def main() -> None:
             "coeffs": coeffs_by_channel[c].tolist(),
             "D": float(D[c]),
             "y_skip_expected": y_skip_chans[c].tolist(),
-            "y_act": y_act_chans[c].tolist()
+            "y_act": gated_chans[c].tolist()
         })
 
     with open(args.out, "w") as f:
