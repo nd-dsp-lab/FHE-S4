@@ -35,9 +35,8 @@ venv\Scripts\activate
 ### 3. Download Python Dependencies
 
 ```bash
-./scripts/setup_python_venv.sh
+pip install -r requirements.txt
 ```
-Ignore the instructions at the end.
 
 
 ### 4. Export json from Python
