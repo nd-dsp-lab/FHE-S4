@@ -17,9 +17,6 @@ struct ChannelData {
     vector<double> coeffs;
     double D;
     vector<double> y_skip_expected;
-    vector<double> y_gelu_expected;
-    vector<double> pre_gate_a;
-    vector<double> pre_gate_b;
     vector<double> y_act;
 };
 
@@ -95,9 +92,6 @@ TestData ParseTestData(const string& filename) {
             channel.coeffs = channel_json.at("coeffs").get<vector<double>>();
             channel.D = channel_json.at("D").get<double>();
             channel.y_skip_expected = channel_json.at("y_skip_expected").get<vector<double>>();
-            channel.y_gelu_expected = channel_json.at("y_gelu_expected").get<vector<double>>();
-            channel.pre_gate_a = channel_json.at("pre_gate_a").get<vector<double>>();
-            channel.pre_gate_b = channel_json.at("pre_gate_b").get<vector<double>>();
             channel.y_act = channel_json.at("y_act").get<vector<double>>();
             data.channels.push_back(std::move(channel));
         }
@@ -239,9 +233,10 @@ int main(int argc, char* argv[]) {
     // PHASE 1: FHE TOEPLITZ CONV + SKIP
     // ==========================================
     vector<Ciphertext<DCRTPoly>> ctxt_y_all(data.d_model);
+
     // time:
     auto t0_fhe = chrono::high_resolution_clock::now();
-
+    
     for (int c = 0; c < data.d_model; ++c) {
         auto& chan = data.channels[c];
         
@@ -319,8 +314,9 @@ int main(int argc, char* argv[]) {
         phase2_max_err = max(phase2_max_err, err);
     }
 
-    cout << "[phase2] overall_post_gelu_max_abs_diff=" << scientific << phase2_max_err << endl;
-    cout << "[phase2] complete" << endl;
+    cout << "[phase2- Using Chebyshev] overall_post_gelu_max_abs_diff=" << scientific << phase2_max_err << endl;
+    cout << "[phase2 - Using Chebyshev] complete" << endl;
+
     
     // ==========================================
     // PHASE 2.5: CONV LAYER AND GLU
@@ -495,6 +491,11 @@ int main(int argc, char* argv[]) {
     cout << "[phase3] Expected Output: " << scientific << data.out_expected << endl;
     cout << "[phase3] Global Error: " << scientific << abs(final_decrypted - data.out_expected) << endl;
     cout << "[phase3] Overall Mean Max Abs Diff: " << scientific << phase3_mean_max_err << endl;
+
+    cout << "=== Timing Comparison ===" << endl;
+    cout << "unencrypted forward: " << scientific << data.unencrypted_forward_time << " s" << endl;
+    cout << "FHE forward: " << scientific << fhe_time << " s" << endl;
+    cout << "Slowdown: " << scientific << fhe_time / data.unencrypted_forward_time << "x" << endl;
     
     return 0;
 }

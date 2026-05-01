@@ -128,6 +128,7 @@ def main() -> None:
         "decoder_weight": decoder_weight,
         "decoder_bias": decoder_bias,
         "out_expected": out_expected,
+        "unencrypted_forward_time": unencrypted_forward_time,
         "post_gelu": [v.tolist() for v in post_gelu_chans],
         "pre_gate": [v.tolist() for v in pre_gate_chans],
         "gate": [v.tolist() for v in gate_chans],
