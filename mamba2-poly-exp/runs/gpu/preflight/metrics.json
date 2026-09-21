@@ -1,0 +1,24 @@
+[
+  {
+    "transition": "poly4",
+    "degree": 4,
+    "interval_mode": "per-head",
+    "interval": "per-head",
+    "pin_zero": true,
+    "fit_method": "chebyshev",
+    "fhe_depth_estimate": "2",
+    "validation_loss": 2.942058564475399,
+    "perplexity": 18.95482590873657,
+    "transition_min": -0.1941777765750885,
+    "transition_max": 1.0,
+    "frac_transition_lt_0": 0.008830741599754052,
+    "frac_transition_gt_1": 0.0,
+    "frac_transition_nan": 0.0,
+    "z_min_observed": -179542.375,
+    "n_degenerate_heads": 0,
+    "wall_seconds": 6.435144662857056,
+    "peak_gpu_memory_gb": 1.0663447380065918,
+    "delta_perplexity": "",
+    "delta_loss": ""
+  }
+]

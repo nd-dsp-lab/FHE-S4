@@ -1,0 +1,19 @@
+{
+  "before_training": {
+    "name": "exact",
+    "degree": null,
+    "ct_ct_depth": null,
+    "coeffs_lowest_first": null,
+    "interval": null,
+    "trainable": false
+  },
+  "after_training": {
+    "name": "exact",
+    "degree": null,
+    "ct_ct_depth": null,
+    "coeffs_lowest_first": null,
+    "interval": null,
+    "trainable": false
+  },
+  "health_after_training": {}
+}

@@ -1,0 +1,22 @@
+{
+  "lengths": [
+    16,
+    64,
+    256,
+    1024
+  ],
+  "degrees": [
+    2,
+    3,
+    4
+  ],
+  "batch": 2,
+  "seed": 0,
+  "xmin": -8.0,
+  "xmax": 0.0,
+  "method": "chebyshev",
+  "pin_zero": false,
+  "delta_scale": 1.0,
+  "outdir": "runs/part4_error_propagation",
+  "no_plot": false
+}

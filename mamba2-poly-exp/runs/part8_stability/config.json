@@ -1,0 +1,32 @@
+{
+  "model": "state-spaces/mamba2-130m",
+  "backend": "local",
+  "device": "cpu",
+  "dtype": "float32",
+  "data": "wikitext2",
+  "split": "validation",
+  "lengths": [
+    128,
+    512,
+    1024,
+    2048
+  ],
+  "blocks": 2,
+  "chunk_size": 128,
+  "seed": 0,
+  "sweep": true,
+  "outdir": "runs/part8_stability",
+  "transition": "exact",
+  "xmin": -8.0,
+  "xmax": 0.0,
+  "fit_method": "chebyshev",
+  "fit_weight": "uniform",
+  "pin_zero": false,
+  "coeff_json": null,
+  "trainable_poly": false,
+  "interval_mode": "global",
+  "stats_json": "runs/part6_transition_stats/transition_stats.json",
+  "interval_margin": 0.25,
+  "interval_percentile": null,
+  "no_zero_degenerate": false
+}
