@@ -69,7 +69,8 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
                              collector=None, seq_idx=None,
                              softplus_gate=None, silu_conv_gate=None,
                              silu_norm_gate=None, fused_dt_gate=None,
-                             gate_collector=None, **unused):
+                             gate_collector=None, gated_norm_override=None,
+                             **unused):
     """One Mamba-2 mixer, in plain PyTorch, with a swappable z -> a map.
 
     Mirrors the `use_mem_eff_path=False` branch of
@@ -167,7 +168,14 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
     # --- 7. gated RMSNorm, then out_proj            (mamba2.py:258-267) ------
     if gate_collector is not None:
         gate_collector(getattr(mixer, "layer_idx", -1), "silu_norm_in", gate)
-    if getattr(mixer, "rmsnorm", True):
+    if gated_norm_override is not None:
+        # Path A / Path B replacement for the gated RMSNorm. It owns its own
+        # gamma and divisor, so the mixer's `norm` module is bypassed entirely
+        # rather than wrapped -- see norm/install_norms.py for why this site
+        # needs an override argument while the other two can be swapped as
+        # modules.
+        y = gated_norm_override(y, gate)
+    elif getattr(mixer, "rmsnorm", True):
         y = rms_norm_gated_ref(y, mixer.norm.weight, getattr(mixer.norm, "bias", None),
                                z=gate, eps=mixer.norm.eps,
                                group_size=getattr(mixer.norm, "group_size", None),
