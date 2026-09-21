@@ -12,17 +12,26 @@ export FHEMAMBA_ROOT=$FHEMAMBA_GROUP/FHEMAMBA          # where this repo lives
 export FHEMAMBA_CONDA_ENV=$HOME/.conda/envs/<env>      # must have torch + mamba_ssm
 ```
 
-For the notification address, **do not edit the job scripts.** A command-line
-`-M` overrides the `#$ -M` directive, so pass it at submit time:
+### The notification address
+
+The job scripts carry **no `#$ -M` / `#$ -m` directive**, and that is deliberate.
+Pass it at submit time:
 
 ```bash
-qsub -M your_netid@nd.edu cluster/job_norm_phase1.sh
+qsub -M your_netid@nd.edu -m abe cluster/job_norm_phase1.sh
 ```
 
-Editing the `#$ -M YOUR_NETID@nd.edu` line works too, but it makes every later
-`git pull` abort with "local changes would be overwritten" — which is exactly what
-happened the first time these scripts were used. The placeholder is deliberately
-fake so a forgotten `-M` fails loudly instead of mailing nobody.
+Why not a placeholder in the script: CRC's `qsub` is a **site wrapper** that
+validates the address *inside* the script, so `YOUR_NETID@nd.edu` is rejected
+outright — and a command-line `-M` does **not** override a `#$ -M` line. And
+editing the line in place makes every later `git pull` abort with "local changes
+would be overwritten", which is what happened on the pull that was carrying a
+fix. With no directive in the file there is nothing to validate and nothing to
+edit.
+
+(Same class of surprise as `qrsh` — see the traps section. Several things named
+`q*` on this cluster are site wrappers, not the SGE binaries, and they do not
+behave the way the SGE manual says.)
 
 The values this work actually used are in the project's own notes, not here.
 

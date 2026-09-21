@@ -3,11 +3,20 @@
 #$ -l gpu=1
 #$ -pe smp 1
 #$ -N fhe_norm_floor
-#$ -M YOUR_NETID@nd.edu
-#$ -m abe
 #$ -cwd
+#
 #$ -o logs/$JOB_NAME.$JOB_ID.out
 #$ -e logs/$JOB_NAME.$JOB_ID.err
+#
+# NO `#$ -M` / `#$ -m` DIRECTIVE ON PURPOSE.
+# CRC's qsub is a site wrapper that VALIDATES the address inside the script, so a
+# placeholder like YOUR_NETID@nd.edu is rejected outright and a command-line -M
+# does NOT override it. Editing the line in place works, but then every later
+# `git pull` aborts with "local changes would be overwritten" -- which is exactly
+# what happened, on the pull carrying a fix. With no directive here there is
+# nothing to validate and nothing to edit, so pass it at submit time:
+#
+#     qsub -M you@nd.edu -m abe cluster/<this script>
 #
 # PHASE 0 / 0b -- the eval noise floor, and the PAIRED floor that is the correct
 # test for an operator swap. Independent of phase 1, so it can run in parallel.
