@@ -1,0 +1,2 @@
+transition,degree,interval_mode,interval,pin_zero,fit_method,fhe_depth_estimate,validation_loss,perplexity,transition_min,transition_max,frac_transition_lt_0,frac_transition_gt_1,frac_transition_nan,z_min_observed,n_degenerate_heads,wall_seconds,peak_gpu_memory_gb,delta_perplexity,delta_loss
+poly4,4,per-head,per-head,True,chebyshev,2,2.942058564475399,18.95482590873657,-0.1941777765750885,1.0,0.008830741599754052,0.0,0.0,-179542.375,0,6.435144662857056,1.0663447380065918,,

@@ -1,0 +1,39 @@
+{
+  "model": "state-spaces/mamba2-130m",
+  "backend": "official",
+  "device": "cuda",
+  "dtype": "torch.float32",
+  "stats_json": "runs/e1_cross_domain/stats_fitted_on_wikitext103.json",
+  "experiments": [
+    "longctx",
+    "lambada",
+    "bootstrap",
+    "margin"
+  ],
+  "degrees": [
+    2,
+    3,
+    4
+  ],
+  "lengths": [
+    1024,
+    2048,
+    4096,
+    8192
+  ],
+  "margins": [
+    0.0,
+    0.1,
+    0.25,
+    0.5,
+    1.0
+  ],
+  "margin": 0.25,
+  "eval_data": "wikitext2",
+  "eval_blocks": 100,
+  "batch_size": 2,
+  "chunk_size": 128,
+  "lambada_examples": 800,
+  "seed": 0,
+  "outdir": "runs/e3456_robustness"
+}

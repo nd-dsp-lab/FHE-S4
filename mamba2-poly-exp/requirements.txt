@@ -1,0 +1,22 @@
+# Parts 1-4 (baby_mamba) need only these three.
+torch>=2.2
+numpy>=1.24
+einops>=0.7
+
+# Parts 5-10 (the real 130M checkpoint)
+transformers>=4.40        # the EleutherAI/gpt-neox-20b tokenizer Mamba was trained with
+huggingface_hub>=0.23     # checkpoint + dataset download
+pyarrow>=15               # reading the wikitext parquet files
+
+# optional
+matplotlib>=3.7           # plots in Part 4; everything still runs without it
+pytest>=8                 # the test suite also runs under `python -m unittest`
+
+# NOT required, and NOT installed by this file:
+#   mamba-ssm  -- needed only for `--backend official`, which wants CUDA + Triton.
+#                 Install it on the GPU machine with:
+#                     pip install mamba-ssm --no-build-isolation
+#                 The default `--backend auto` falls back to a pure-PyTorch loader
+#                 that reads the SAME official checkpoint, so nothing here needs it.
+#   causal-conv1d -- an optimisation for the depthwise conv; we use a pure-torch
+#                 equivalent in real_mamba/nn_ref.py.

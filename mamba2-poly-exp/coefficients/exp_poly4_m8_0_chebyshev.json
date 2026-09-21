@@ -1,0 +1,57 @@
+{
+  "target_function": "exp",
+  "degree": 4,
+  "coeffs_lowest_first": [
+    0.966259236031004,
+    0.7807887469791593,
+    0.23546697817250722,
+    0.030656783692512565,
+    0.0014444292825588128
+  ],
+  "interval": [
+    -8.0,
+    0.0
+  ],
+  "fit_method": "chebyshev",
+  "fit_weight": "uniform",
+  "pin_zero": false,
+  "ct_ct_depth": 2,
+  "ct_ct_mults": 3,
+  "power_schedule": [
+    [
+      2,
+      1,
+      1
+    ],
+    [
+      3,
+      1,
+      2
+    ],
+    [
+      4,
+      2,
+      2
+    ]
+  ],
+  "evaluation": "explicit powers (NOT Horner); see baby_mamba/polynomial.py",
+  "error_report": {
+    "degree": 4,
+    "interval": [
+      -8.0,
+      0.0
+    ],
+    "max_abs_error": 0.033740763968995946,
+    "argmax_abs_error_z": 0.0,
+    "mean_abs_error": 0.011030477479852236,
+    "rmse": 0.013063485787688608,
+    "max_rel_error": 28.645490154408566,
+    "mean_rel_error": 2.4948920102287113,
+    "poly_min": -0.009674419589069672,
+    "poly_max": 0.966259236031004,
+    "frac_poly_lt_0": 0.16904154792260387,
+    "frac_poly_gt_1": 0.0,
+    "P_at_0": 0.966259236031004,
+    "P_at_xmin": 0.00994495403265594
+  }
+}

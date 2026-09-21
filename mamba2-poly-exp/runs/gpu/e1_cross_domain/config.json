@@ -1,0 +1,29 @@
+{
+  "model": "state-spaces/mamba2-130m",
+  "backend": "official",
+  "device": "cuda",
+  "dtype": "torch.float32",
+  "fit_data": "wikitext103",
+  "fit_split": "train",
+  "fit_blocks": 64,
+  "eval_data": [
+    "wikitext2",
+    "pile",
+    "lambada"
+  ],
+  "eval_split": "validation",
+  "eval_blocks": 100,
+  "seq_len": 1024,
+  "batch_size": 4,
+  "chunk_size": 128,
+  "degrees": [
+    2,
+    3,
+    4
+  ],
+  "margin": 0.25,
+  "fit_method": "chebyshev",
+  "pin_zero": true,
+  "seed": 0,
+  "outdir": "runs/e1_cross_domain"
+}

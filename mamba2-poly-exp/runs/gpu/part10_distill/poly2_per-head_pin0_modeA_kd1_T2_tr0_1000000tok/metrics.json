@@ -1,0 +1,35 @@
+{
+  "teacher_perplexity": 22.243223995989787,
+  "starting_perplexity": 22.270212730760502,
+  "ending_perplexity": 22.35638045143929,
+  "teacher_loss": 3.1020374227246,
+  "starting_loss": 3.10325003357033,
+  "ending_loss": 3.107111759129857,
+  "delta_perplexity_vs_teacher": 0.11315645544950215,
+  "recovered_fraction": -3.192729166848064,
+  "training_seconds": 281.9724831581116,
+  "training_hours": 0.0783256897661421,
+  "peak_gpu_memory_gb": 12.50875186920166,
+  "optimiser_steps": 61,
+  "trainable": {
+    "mode": "A",
+    "trainable_groups": {
+      "transition_local": 1728
+    },
+    "n_trainable": 1728,
+    "n_total": 128989632,
+    "trainable_fraction": 1.3396425535968659e-05
+  },
+  "fhe_depth_estimate": "1",
+  "lambda_lm": 1.0,
+  "lambda_kd": 1.0,
+  "lambda_transition": 0.0,
+  "temperature": 2.0,
+  "transition_min": -0.12375926971435547,
+  "transition_max": 1.0,
+  "frac_transition_lt_0": 0.0006044175889756945,
+  "frac_transition_gt_1": 0.0,
+  "frac_transition_nan": 0.0,
+  "z_min_observed": -136641.765625,
+  "n_transition_values": 2359296
+}

@@ -1,0 +1,53 @@
+{
+  "P2": {
+    "name": "poly2",
+    "degree": 2,
+    "coeffs_lowest_first": [
+      0.7218742370605469,
+      0.26740390062332153,
+      0.022878557443618774
+    ],
+    "interval": [
+      -8.0,
+      0.0
+    ],
+    "ct_ct_depth": 1,
+    "ct_ct_mults": 1,
+    "trainable": false
+  },
+  "P3": {
+    "name": "poly3",
+    "degree": 3,
+    "coeffs_lowest_first": [
+      0.8958911299705505,
+      0.5520119667053223,
+      0.10651557147502899,
+      0.006484839133918285
+    ],
+    "interval": [
+      -8.0,
+      0.0
+    ],
+    "ct_ct_depth": 2,
+    "ct_ct_mults": 2,
+    "trainable": false
+  },
+  "P4": {
+    "name": "poly4",
+    "degree": 4,
+    "coeffs_lowest_first": [
+      0.966259241104126,
+      0.7807887196540833,
+      0.23546697199344635,
+      0.030656782910227776,
+      0.0014444292755797505
+    ],
+    "interval": [
+      -8.0,
+      0.0
+    ],
+    "ct_ct_depth": 2,
+    "ct_ct_mults": 3,
+    "trainable": false
+  }
+}
