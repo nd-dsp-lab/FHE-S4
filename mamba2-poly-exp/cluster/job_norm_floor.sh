@@ -17,6 +17,12 @@
 # noise. But those comparisons are PAIRED, so the unpaired spread is too lenient
 # -- this job measures the paired standard error at both lengths so the gate is
 # applied correctly.
+# qsub does not forward your shell environment unless you pass -V, so give the
+# two paths a default here. Override by exporting them and submitting with -V.
+: "${FHEMAMBA_CONDA_ENV:=$HOME/.conda/envs/pdpo}"
+: "${HF_HOME:=/groups/tjung/$USER/FHEMAMBA/hf-cache}"
+export FHEMAMBA_CONDA_ENV HF_HOME
+
 source cluster/env.sh
 source cluster/job_common.sh
 

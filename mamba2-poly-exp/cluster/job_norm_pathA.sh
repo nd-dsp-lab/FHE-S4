@@ -19,6 +19,12 @@
 # fp16, and these trainers have no GradScaler, which is exactly how a run with
 # 49 tiny log_c scalars silently learns nothing. fp32 costs us nothing here: the
 # trainable set is ~56k parameters and peak memory was 11 GB of 22 GB.
+# qsub does not forward your shell environment unless you pass -V, so give the
+# two paths a default here. Override by exporting them and submitting with -V.
+: "${FHEMAMBA_CONDA_ENV:=$HOME/.conda/envs/pdpo}"
+: "${HF_HOME:=/groups/tjung/$USER/FHEMAMBA/hf-cache}"
+export FHEMAMBA_CONDA_ENV HF_HOME
+
 source cluster/env.sh
 source cluster/job_common.sh
 

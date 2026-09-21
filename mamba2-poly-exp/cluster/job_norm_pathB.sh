@@ -21,6 +21,12 @@
 # iteration DIVERGES and MORE steps diverge FASTER (at v'=5: 54 -> 1.3e5 ->
 # 7.9e14). So this is a range problem, not an accuracy problem, and the range
 # penalty is the mechanism -- not the iteration count.
+# qsub does not forward your shell environment unless you pass -V, so give the
+# two paths a default here. Override by exporting them and submitting with -V.
+: "${FHEMAMBA_CONDA_ENV:=$HOME/.conda/envs/pdpo}"
+: "${HF_HOME:=/groups/tjung/$USER/FHEMAMBA/hf-cache}"
+export FHEMAMBA_CONDA_ENV HF_HOME
+
 source cluster/env.sh
 source cluster/job_common.sh
 

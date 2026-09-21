@@ -19,12 +19,34 @@
 
 set -uo pipefail
 
-FHEMAMBA_CONDA_ENV="${FHEMAMBA_CONDA_ENV:-${FHEMAMBA_CONDA_ENV}}"
+# FHEMAMBA_ROOT defaults to the repo root, discovered from this script's own
+# location, so it is correct wherever the repo is cloned.
+_ENV_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+FHEMAMBA_ROOT="${FHEMAMBA_ROOT:-$(dirname "$_ENV_SH_DIR")}"
+export FHEMAMBA_ROOT
+
+# There is no sensible default for the conda env -- it is per-user and must have
+# torch. An earlier version of this file had a SELF-REFERENTIAL default here
+# (`${FHEMAMBA_CONDA_ENV:-${FHEMAMBA_CONDA_ENV}}`), a scrubbing accident that
+# resolved to the empty string and killed two submitted jobs with
+# `no python at /bin/python`. It now fails with an actionable message instead.
+FHEMAMBA_CONDA_ENV="${FHEMAMBA_CONDA_ENV:-}"
+if [ -z "$FHEMAMBA_CONDA_ENV" ]; then
+  # last resort: an already-activated conda env
+  FHEMAMBA_CONDA_ENV="${CONDA_PREFIX:-}"
+fi
+if [ -z "$FHEMAMBA_CONDA_ENV" ]; then
+  echo "FATAL: FHEMAMBA_CONDA_ENV is not set and no conda env is active."
+  echo "       export FHEMAMBA_CONDA_ENV=/path/to/an/env/with/torch"
+  echo "       (and remember qsub does not forward your environment unless you pass -V)"
+  return 1 2>/dev/null || exit 1
+fi
 PY="$FHEMAMBA_CONDA_ENV/bin/python"
 
 if [ ! -x "$PY" ]; then
   echo "FATAL: no python at $PY"
-  echo "       Set FHEMAMBA_CONDA_ENV to an env that has torch + mamba_ssm."
+  echo "       Set FHEMAMBA_CONDA_ENV to an env that has torch + mamba_ssm,"
+  echo "       and pass -V to qsub so it reaches the job."
   echo "       Do NOT let a batch job build one -- see the note at the top of this file."
   return 1 2>/dev/null || exit 1
 fi
@@ -37,7 +59,7 @@ export PATH="$FHEMAMBA_CONDA_ENV/bin:$PATH"
 # It is also a cache of our OWN, not the shared ~/.cache/huggingface: the
 # DP-GRPO project sets HF_HOME itself in several of its job scripts, and sharing
 # a cache across projects on a nearly-full filesystem is how you get a surprise.
-FHEMAMBA_HF_HOME_DEFAULT=${FHEMAMBA_ROOT}/hf-cache
+FHEMAMBA_HF_HOME_DEFAULT="${FHEMAMBA_ROOT}/hf-cache"
 if [ -d "$FHEMAMBA_HF_HOME_DEFAULT" ]; then
   export HF_HOME="${HF_HOME:-$FHEMAMBA_HF_HOME_DEFAULT}"
 else

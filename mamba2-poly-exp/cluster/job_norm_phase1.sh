@@ -14,6 +14,12 @@
 # Path B outright. The Newton convergence basin was measured at v/s in
 # [0.25, 2.0] -- only 8x wide -- so if the WITHIN-layer p99/p1 of v exceeds 8,
 # a static per-layer prescale cannot work regardless of how well it is trained.
+# qsub does not forward your shell environment unless you pass -V, so give the
+# two paths a default here. Override by exporting them and submitting with -V.
+: "${FHEMAMBA_CONDA_ENV:=$HOME/.conda/envs/pdpo}"
+: "${HF_HOME:=/groups/tjung/$USER/FHEMAMBA/hf-cache}"
+export FHEMAMBA_CONDA_ENV HF_HOME
+
 source cluster/env.sh
 source cluster/job_common.sh
 
