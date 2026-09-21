@@ -7,9 +7,11 @@ __pycache__/
 # job logs: noisy, and they embed absolute cluster paths. But the DIRECTORY must
 # be tracked: every job script has `#$ -o logs/...`, and SGE's shepherd opens
 # that file BEFORE your script runs. If logs/ does not exist the job dies at
-# startup and writes no log at all -- which is what happened on a fresh clone,
-# and it looks exactly like "the job terminated immediately for no reason".
-# A `mkdir -p logs` inside the script is too late to help.
+# startup and writes no log at all -- it looks exactly like "the job terminated
+# immediately for no reason". A `mkdir -p logs` inside the script is too late.
+# (Found while diagnosing four jobs that died instantly. Whether it was THE
+# cause of those four was never confirmed -- the cluster was unreachable. It is
+# a real defect either way: a fresh clone had no logs/ directory.)
 logs/*
 !logs/.gitkeep
 *.log

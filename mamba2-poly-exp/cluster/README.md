@@ -39,7 +39,12 @@ Every script here has `#$ -o logs/...`. SGE's shepherd opens that file **before*
 your script runs, and it will not create the directory. On a fresh clone with no
 `logs/` the job therefore fails at startup, and because the failure is in opening
 the log, there is no log to read -- it just looks like the job vanished. Confirm
-it with `qacct -j <jobid>`: `failed` will be a `26 : opening input/output file`.
+it with `qacct -j <jobid>`: `failed` should read `26 : opening input/output file`.
+
+This was found by inspection, not observation. Four jobs of this project did die
+instantly, and this would explain all four, but the cluster frontend was
+unreachable throughout and the attribution was never checked. If you are looking
+at a job that vanished, run the `qacct` above before assuming this is why.
 
 `mkdir -p logs` fixes it, and `logs/.gitkeep` is tracked so a clone has the
 directory already. A `mkdir` *inside* a job script is too late.
