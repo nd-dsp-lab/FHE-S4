@@ -1,0 +1,9 @@
+config,softplus,exp,silu_conv,silu_norm,degree,per_layer_ct_ct_depth,network_depth_24_layers,loss,perplexity,peak_gpu_gb,delta_ppl
+baseline: everything exact,False,False,False,False,4,0,0,2.89794340161634,18.13680685977175,nan,0.0
+exp only (the previous result),False,True,False,False,4,2,48,2.8979557220071177,18.13703031369624,nan,0.00022345392449096835
+SiLU after conv1d only,False,False,True,False,4,2,48,36.379574713236195,6301566909871904.0,nan,6301566909871886.0
+SiLU in gated norm only,False,False,False,True,4,2,48,3.8855626021429006,48.69433028910996,nan,30.557523429338215
+softplus only,True,False,False,False,4,2,48,2.913166840405059,18.41502376472071,nan,0.27821690494896245
+exp + SiLU(conv),False,True,True,False,4,2,48,36.37079424219514,6246478389612916.0,nan,6246478389612898.0
+exp + softplus,True,True,False,False,4,4,96,2.9130415781269092,18.41271720135747,nan,0.27591034158572114
+ALL FOUR,True,True,True,True,4,6,144,nan,inf,nan,inf

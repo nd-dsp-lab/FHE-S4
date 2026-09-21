@@ -30,11 +30,34 @@ import contextlib
 from dataclasses import dataclass, field
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
 from baby_mamba.transition import ExactExp
-from real_mamba.nn_ref import causal_depthwise_conv1d_ref, rms_norm_gated_ref
+from real_mamba.nn_ref import (
+    causal_conv1d_preact_ref,
+    causal_depthwise_conv1d_ref,
+    rms_norm_gated_ref,
+)
+
+
+class _FusedTransition(nn.Module):
+    """Adapter: the scan asks for a = f(z), but the fused gate wants the RAW dt.
+
+    So we ignore the z it is handed and evaluate the fused per-head polynomial on
+    the raw projection instead. Same tensor shape, same position in the graph --
+    only the input differs, and `z` is not needed at all on this route.
+    """
+
+    def __init__(self, gate, dt_raw):
+        super().__init__()
+        self.gate, self.dt_raw = gate, dt_raw
+        self.ct_ct_depth = gate.ct_ct_depth
+        self.degree = gate.degree
+
+    def forward(self, z):
+        return self.gate(self.dt_raw[..., : z.shape[-1]])
 from real_mamba.reference_ssd import ssd_product_form
 
 
@@ -43,13 +66,28 @@ from real_mamba.reference_ssd import ssd_product_form
 # =============================================================================
 
 def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
-                             collector=None, seq_idx=None, **unused):
+                             collector=None, seq_idx=None,
+                             softplus_gate=None, silu_conv_gate=None,
+                             silu_norm_gate=None, fused_dt_gate=None,
+                             gate_collector=None, **unused):
     """One Mamba-2 mixer, in plain PyTorch, with a swappable z -> a map.
 
     Mirrors the `use_mem_eff_path=False` branch of
     third_party/mamba/mamba_ssm/modules/mamba2.py:209-261, step for step.
 
     `collector`, if given, receives (layer_idx, z, a) for Parts 6 and 8.
+
+    The gate arguments replace the OTHER non-polynomial operations, each
+    independently swappable so they can be evaluated one at a time:
+        softplus_gate    replaces softplus in  Delta = softplus(dt + dt_bias)
+        silu_conv_gate   replaces SiLU after the depthwise conv1d
+        silu_norm_gate   replaces SiLU inside the gated RMSNorm
+        fused_dt_gate    replaces softplus AND the exp transition together, with
+                         one per-head polynomial -- one lot of depth instead of
+                         two (see real_mamba/gates.py). Overrides both
+                         `softplus_gate` and `transition` when given.
+    `gate_collector`, if given, receives (layer_idx, name, tensor) for each gate
+    INPUT, so the real ranges can be measured before anything is fitted.
     """
     batch, seqlen, _ = u.shape
 
@@ -71,15 +109,32 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
     # --- 4. depthwise causal conv1d + SiLU          (mamba2.py:231-235) ------
     # Untouched by this project. We only re-express it in pure torch because
     # `causal_conv1d_fn` is a CUDA extension.
-    xBC = causal_depthwise_conv1d_ref(xBC, mixer.conv1d, mixer.d_conv,
-                                      getattr(mixer, "activation", "silu"))
+    xBC_pre = causal_conv1d_preact_ref(xBC, mixer.conv1d, mixer.d_conv)
+    if gate_collector is not None:
+        gate_collector(getattr(mixer, "layer_idx", -1), "silu_conv_in", xBC_pre)
+    xBC = (silu_conv_gate(xBC_pre) if silu_conv_gate is not None
+           else F.silu(xBC_pre))
     x, Bm, Cm = torch.split(xBC, [d_ssm, ngroups * d_state, ngroups * d_state], dim=-1)
 
     # --- 5. dt = softplus(dt + dt_bias)             (mamba2.py:254 dt_softplus) -
     # Upstream does this INSIDE the Triton kernel (ssd_chunk_state.py:73-77), so
     # it is invisible from Python on the default path. Here it is explicit.
     # softplus is NOT part of what we replace.
-    dt = F.softplus(dt.float() + mixer.dt_bias.float())            # (B, L, nheads)
+    dt_raw = dt.float()
+    if gate_collector is not None:
+        gate_collector(getattr(mixer, "layer_idx", -1), "dt_raw", dt_raw)
+        gate_collector(getattr(mixer, "layer_idx", -1), "softplus_in",
+                       dt_raw + mixer.dt_bias.float())
+    if fused_dt_gate is not None:
+        # One polynomial per head for x -> exp(A*softplus(x+b)). Delta is never
+        # materialised, so we hand the scan a=fused(dt_raw) directly and give it
+        # Delta=softplus(...) only for the INPUT weighting b_t = Delta*B*x, which
+        # is a separate use and still needs a real Delta.
+        dt = F.softplus(dt_raw + mixer.dt_bias.float())
+    elif softplus_gate is not None:
+        dt = softplus_gate(dt_raw + mixer.dt_bias.float())
+    else:
+        dt = F.softplus(dt_raw + mixer.dt_bias.float())            # (B, L, nheads)
     dt_limit = tuple(getattr(mixer, "dt_limit", (0.0, float("inf"))))
     if dt_limit != (0.0, float("inf")):
         # Upstream clamps dt when dt_limit is set (ssd_chunk_state.py:80). The
@@ -98,7 +153,8 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
         A,
         rearrange(Bm.float(), "b l (g n) -> b l g n", g=ngroups),
         rearrange(Cm.float(), "b l (g n) -> b l g n", g=ngroups),
-        transition,
+        (_FusedTransition(fused_dt_gate, dt_raw) if fused_dt_gate is not None
+         else transition),
         D=D,
         chunk_size=chunk_size or mixer.chunk_size,
         return_a=True,
@@ -109,13 +165,18 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
     y = rearrange(y, "b l h p -> b l (h p)").to(u.dtype)
 
     # --- 7. gated RMSNorm, then out_proj            (mamba2.py:258-267) ------
+    if gate_collector is not None:
+        gate_collector(getattr(mixer, "layer_idx", -1), "silu_norm_in", gate)
     if getattr(mixer, "rmsnorm", True):
         y = rms_norm_gated_ref(y, mixer.norm.weight, getattr(mixer.norm, "bias", None),
                                z=gate, eps=mixer.norm.eps,
                                group_size=getattr(mixer.norm, "group_size", None),
-                               norm_before_gate=getattr(mixer, "norm_before_gate", False))
+                               norm_before_gate=getattr(mixer, "norm_before_gate", False),
+                               silu_gate=silu_norm_gate,
+                               gate_collector=gate_collector,
+                               layer_idx=getattr(mixer, "layer_idx", -1))
     else:
-        y = y * F.silu(gate)
+        y = y * (silu_norm_gate(gate) if silu_norm_gate is not None else F.silu(gate))
     if d_mlp > 0:
         y = torch.cat([F.silu(z0) * x0, y], dim=-1)
     return mixer.out_proj(y)

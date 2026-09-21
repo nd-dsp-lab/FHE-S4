@@ -1,32 +1,25 @@
-# --- undo the repo root's blanket exclusions -------------------------------
-# The root .gitignore has `*.json`, `*.png` and `*.pt`, which are right for the
-# C++/OpenFHE side of this repo but would silently drop EVERY result file in this
-# subtree -- metrics.json, config.json, the fitted coefficients, the Part 4 plot.
-# Negate them here, then re-exclude the specific bulk further down.
-!*.json
-!*.png
-
-# --- virtualenv / caches ---------------------------------------------------
+# virtualenv / caches
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# --- job logs: noisy, and they embed absolute cluster paths ----------------
+# job logs: noisy, and they embed absolute cluster paths
 logs/
 *.log
 
-# --- regenerable bulk ------------------------------------------------------
-# The RESULT files (csv / metrics.json / config.json) and the 130m fitted
-# coefficients ARE committed -- they are the deliverable, and they let you
-# reproduce the per-head polynomials with no GPU via --coeff-json.
-# What is excluded here is large and regenerable:
-#   transition_stats.json for the bigger models holds per-head arrays for
-#   thousands of heads; the per-model coefficient dumps likewise. Rebuild with
+# Experiment outputs. The RESULT files (csv / metrics.json / config.json) are
+# committed on purpose -- they are the deliverable. What is excluded below is
+# regenerable bulk:
+#   transition_stats.json for the larger models holds per-head arrays for
+#   thousands of heads (MBs each); polynomial_coefficients.json holds every
+#   coefficient of every head. Both are reproduced by:
 #       python collect_transition_stats.py --model <model> --blocks 64
 runs/gpu/e2_scale/*/stats/transition_stats.json
 runs/gpu/e2_scale/*/sweep/polynomial_coefficients.json
 runs/gpu/e1_cross_domain/fit_stats/
+runs/gpu/part9_finetune/*/polynomial_coefficients.json
+runs/gpu/part10_distill/*/polynomial_coefficients.json
 runs/_smoke/
 runs/part7_zero_training_full/
 
