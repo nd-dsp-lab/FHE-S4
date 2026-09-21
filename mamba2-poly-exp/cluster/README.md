@@ -41,10 +41,20 @@ your script runs, and it will not create the directory. On a fresh clone with no
 the log, there is no log to read -- it just looks like the job vanished. Confirm
 it with `qacct -j <jobid>`: `failed` should read `26 : opening input/output file`.
 
-This was found by inspection, not observation. Four jobs of this project did die
-instantly, and this would explain all four, but the cluster frontend was
-unreachable throughout and the attribution was never checked. If you are looking
-at a job that vanished, run the `qacct` above before assuming this is why.
+**This never actually happened here.** It was a hypothesis, twice presented as a
+diagnosis, and the logs refuted it: `logs/` existed on the cluster and every job
+wrote into it. The hardening stays because the directory really was untracked,
+so a clone elsewhere could hit this -- but it explained none of the four failures
+in this project. Those were:
+
+| symptom | real cause |
+|---|---|
+| 134-byte log, dies at once | `cluster/env.sh:22` had a self-referential default (`${X:-${X}}`), and under `set -u` that is an unbound-variable abort |
+| 6.4 KB log, unpaired stage passes then stops | `runs/gate_stats/gate_stats.json` is 24 MB, excluded by the root `.gitignore`'s blanket `*.json`, so a fresh clone cannot have it; the floor job now regenerates it |
+
+Note `qacct` is unavailable on this cell (`No such file or directory:
+/opt/sge/crc/common/accounting`), so the job logs are the only record. Read them
+before theorising -- which is the lesson of the two wrong diagnoses above.
 
 `mkdir -p logs` fixes it, and `logs/.gitkeep` is tracked so a clone has the
 directory already. A `mkdir` *inside* a job script is too late.

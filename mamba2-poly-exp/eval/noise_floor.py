@@ -155,16 +155,29 @@ def main(argv=None) -> int:
               f"{r['max_ppl']:9.4f} {r['range_ppl']:9.4f}")
     print("-" * len(hdr))
     print()
-    print("SIGNIFICANT means |delta ppl| > 2 sigma at that length. Applying that to")
-    print("the differences already recorded in GATES.md:")
+    print("WHAT THIS NUMBER IS, AND WHAT IT IS NOT")
+    print()
+    print("2 sigma above is the spread of perplexity across DIFFERENT TEXT. It is the")
+    print("right yardstick for 'is this corpus harder than that one', and the WRONG")
+    print("one for an operator swap, where both models see the SAME tokens with the")
+    print("SAME weights and shard difficulty cancels between them. Using it here is")
+    print("far too lenient: measured paired at L=512, the squared-softplus gate is")
+    print("+0.4663 with 2*SEM = 0.0562 -- comfortably SIGNIFICANT -- while against")
+    print("the unpaired 2 sigma of ~5 it would read as 'within noise'. An earlier")
+    print("version of this script printed exactly that verdict for all four gates,")
+    print("including SiLU-after-conv1d at +3.95, and it was wrong to.")
+    print()
+    print("For any gate comparison use eval/paired_significance.py, which reports")
+    print("the standard error of the per-shard DIFFERENCE. The table below is kept")
+    print("only as the across-corpus scale, with no verdicts attached:")
     recorded = [("exp", 0.0002), ("softplus (squared)", 0.278),
                 ("SiLU in gated norm", 1.69), ("SiLU after conv1d", 3.95)]
     for L, r in results.items():
         ts = r["two_sigma"]
-        print(f"\n  at L={r['seq_len']}  (2 sigma = {ts:.4f} ppl)")
+        print(f"\n  at L={r['seq_len']}  (unpaired 2 sigma = {ts:.4f} ppl)")
         for name, d in recorded:
-            verdict = "SIGNIFICANT" if abs(d) > ts else "within noise -- NOT significant"
-            print(f"    {name:22s} {d:+8.4f}   {verdict}")
+            print(f"    {name:22s} {d:+8.4f}   "
+                  f"{abs(d) / ts:5.3f} x the unpaired floor -- verdict: see paired test")
     print()
     print(f"wrote {args.out}")
     return 0

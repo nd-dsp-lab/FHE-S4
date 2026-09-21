@@ -9,9 +9,11 @@ __pycache__/
 # that file BEFORE your script runs. If logs/ does not exist the job dies at
 # startup and writes no log at all -- it looks exactly like "the job terminated
 # immediately for no reason". A `mkdir -p logs` inside the script is too late.
-# (Found while diagnosing four jobs that died instantly. Whether it was THE
-# cause of those four was never confirmed -- the cluster was unreachable. It is
-# a real defect either way: a fresh clone had no logs/ directory.)
+# (This was NOT the cause of any job failure in this project -- logs/ existed on
+# the cluster and jobs wrote into it. Two of my diagnoses blamed it wrongly. The
+# hardening is kept because the directory genuinely was untracked, so a clone
+# elsewhere could hit it; the real failures were an unbound variable in env.sh
+# and a missing 24 MB gate_stats.json. See cluster/README.md.)
 logs/*
 !logs/.gitkeep
 *.log

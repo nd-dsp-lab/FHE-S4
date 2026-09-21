@@ -154,6 +154,23 @@ def main(argv=None) -> int:
                 d[layer] = Reservoir(seed=args.seed + hash((site, layer)) % 1000)
             return d[layer]
 
+        # --- un-fuse add+norm, or the pre-hooks below never fire -----------
+        # mamba2-130m ships fused_add_norm=True, and on that path neither norm
+        # is called as a MODULE: Block.forward hands self.norm.weight to
+        # layer_norm_fn (third_party/mamba/mamba_ssm/modules/block.py:57) and
+        # MixerModel.forward does the same for norm_f
+        # (models/mixer_seq_simple.py:208). A forward pre-hook on the module
+        # therefore observes nothing -- which is how the first run of this
+        # script reported statistics for norm_gated only and silently returned
+        # zero samples for the other 25 of 49 instances. Turning the flag off
+        # restores the plain module calls at block.py:53 and
+        # mixer_seq_simple.py:205; it is the same RMSNorm, just unfused.
+        _fused_saved = [(model.backbone, model.backbone.fused_add_norm)]
+        model.backbone.fused_add_norm = False
+        for _blk in model.backbone.layers:
+            _fused_saved.append((_blk, _blk.fused_add_norm))
+            _blk.fused_add_norm = False
+
         # --- module pre-hooks for norm_pre and norm_f ----------------------
         handles = []
         for layer, (name, mod) in pre_norms.items():
@@ -192,6 +209,8 @@ def main(argv=None) -> int:
             for h in handles:
                 h.remove()
             ph.restore()
+            for _obj, _flag in _fused_saved:
+                _obj.fused_add_norm = _flag
 
         out["by_length"][str(L)] = {
             site: {str(l): r.summary() for l, r in sorted(d.items())}
@@ -211,7 +230,12 @@ def main(argv=None) -> int:
                f"{'max v':>11} {'median p99/p1':>14} {'worst p99/p1':>13} {'max/min':>11}")
         print(hdr); print("-" * len(hdr))
         for site, d in bl.items():
-            if not d:
+            # A site with no samples is a BUG, not an absent site -- say so.
+            # The first run of this script printed norm_gated only and skipped
+            # the other two in silence, which read as "nothing to report".
+            if not d or not any(v.get("count") for v in d.values()):
+                print(f"{site:>11} {'--':>7}   NO SAMPLES COLLECTED -- the hook "
+                      f"never fired; do not read this as 'no data exists'")
                 continue
             meds = [v["median"] for v in d.values() if v.get("count")]
             r99 = [v["p99_over_p1"] for v in d.values() if v.get("count")]

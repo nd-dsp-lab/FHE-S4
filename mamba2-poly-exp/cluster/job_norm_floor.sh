@@ -39,6 +39,18 @@ echo "=== unpaired floor, more shards than CPU could manage ==="
 python eval/noise_floor.py --backend official --device cuda \
     --shards 16 --lengths 512 2048 --batch-size 4 --out eval/noise_floor_gpu.json
 
+# paired_significance.py builds the per-channel SiLU gates from
+# runs/gate_stats/gate_stats.json. That file is 24 MB of per-channel arrays and
+# is excluded by the root .gitignore's blanket `*.json`, so a FRESH CLONE NEVER
+# HAS IT -- the first GPU run of this job died here with FileNotFoundError after
+# the unpaired stage had already succeeded. It is regenerable, so regenerate it
+# rather than committing 24 MB.
+if [ ! -s runs/gate_stats/gate_stats.json ]; then
+  echo "=== runs/gate_stats/gate_stats.json missing -- collecting it first ==="
+  python collect_gate_stats.py --backend official --device cuda --dtype float16 \
+      --blocks 16 --outdir runs/gate_stats
+fi
+
 echo "=== paired floor: every gate, both lengths ==="
 python eval/paired_significance.py --backend official --device cuda \
     --gate exp softplus silu_norm silu_conv --shards 16 --lengths 512 2048 \
