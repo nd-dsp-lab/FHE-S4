@@ -723,3 +723,72 @@ remote login shell ate a `$(qsub ...)` command substitution.
 no CKKS parameters, noise budget or latency behind it. `frac(a<0) ≈ 0.008` is
 unexplained. The MODE B/C post-fine-tuning `frac(a>1)` regression still has no
 re-fit experiment. English only, one architecture family.
+
+---
+
+## Milestone: STEP 1' Phase 0 + Phase 0b + Phase 1 — the eval floor, and Path B's cause of death
+
+**Implemented.** `eval/noise_floor.py` (unpaired spread across disjoint token
+shards, no block straddling), `eval/paired_significance.py` (per-shard paired
+difference, the correct error bar for an operator swap), and
+`norm/collect_norm_stats.py` (the distribution of the mean-square argument `v`
+at every RMSNorm instance). Both paths' scaffolding exists — `norm/const_norm.py`
+(Path A, learned constant divisor, zero levels) and `norm/newton_norm.py`
+(Path B, prescaled Newton inverse sqrt) — with one weight set serving as both
+teacher and student.
+
+**Learned.**
+
+*The floor, and which floor.* Unpaired 2σ is 5.50 ppl at L=512 and 4.14 at
+L=2048 (16 shards, GPU). Paired, the same swap is measured 88× tighter: the exp
+gate is +0.0001 with 2·SEM = 0.0019, and squared-softplus is +0.4663 with
+2·SEM = 0.0562 — **significant**, where the unpaired floor would have cleared
+it. This is not a refinement, it is the difference between a true and a false
+conclusion, and `eval/noise_floor.py` had been printing the false one for all
+four gates. Any gate verdict in this project must come from the paired test.
+
+*Path B is dead, on a criterion fixed before the measurement.* Newton's method
+for `1/sqrt(v)` converges only for `v/s ∈ [0.25, 2.0]` — an 8× window — so a
+static per-layer prescale needs the **within-layer** spread of `v` to fit in 8×.
+Measured over 24 `norm_gated` instances: median `p99/p1` = **19.66** at L=512
+and 19.54 at L=2048; worst layer **6268** and 6745; `max/min` ≈ 1e7. The median
+layer is 2.5× too wide and the worst ~780×. No training budget fixes a
+divergent iteration. The nine planned Path B configurations were cancelled
+rather than run — the point of stating the kill condition in advance.
+
+*Path A's length question resolved favourably.* Median `v` moves by 0.971 from
+L=512 to L=2048, worst layer 1.132, `p99/p1` shift 1.076. One learned constant
+can serve both lengths; per-length constants are not needed. But the same
+within-layer `p99/p1` of ~20 means a constant divisor faces a ~4.4× swing in
+`1/sqrt(v)` inside the median layer, and ~79× in the worst — so Path A is not
+free either, and its cost has to be read off perplexity, not off this table.
+
+**Bugs these logs exposed.** (1) `norm_pre` and `norm_f` collected **zero**
+samples — 25 of 49 instances — and the report skipped empty sites silently, so
+the table looked complete. `fused_add_norm=True` routes both through
+`layer_norm_fn` with `self.norm.weight`, so the module is never called and a
+forward pre-hook cannot fire (`block.py:57`, `mixer_seq_simple.py:208`). The
+script already handled this for `norm_gated`; I assumed the other two were
+ordinary module calls. It now un-fuses for the collection pass and shouts
+`NO SAMPLES COLLECTED`. **Path A stage A1 targets `norm_pre`, so Phase 1 is only
+24/49 done and A1 cannot be initialised from measurement until it is rerun.**
+(2) The floor job died after its unpaired stage on a missing 24 MB
+`gate_stats.json`, excluded by the root `.gitignore`'s blanket `*.json`; the job
+now regenerates it.
+
+**Still uncertain.** Path A is unrun at every stage. Whether a constant divisor
+survives a within-layer 20× spread of `v` is the open question, and the honest
+prior from that number is "probably not without help" — which would leave the
+normalisation operators unreplaced and is a legitimate outcome of this step.
+Nothing is yet known about `norm_pre` or `norm_f` distributions. No CKKS
+parameters back the level counts.
+
+**A process failure worth recording.** Four jobs died and I diagnosed the cause
+twice without reading a single log — once blaming `env.sh`, once a missing
+`logs/` directory. The logs show the first was right in substance and wrong in
+mechanism (an unbound-variable abort under `set -u`, not a bad interpreter
+path), and the second was simply false: `logs/` existed and jobs wrote into it.
+The first "verification" of that second claim was `git ls-files` run in a
+directory that is not a git repository; it exited 128 with no output and I read
+empty output as "nothing tracked". `qacct` is unavailable on this cell, so job
+logs are the only record — read them before theorising.
