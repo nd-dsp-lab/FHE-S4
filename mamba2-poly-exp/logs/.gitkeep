@@ -1,0 +1,2 @@
+SGE opens the -o/-e files before the job script runs, so this directory
+must exist in a fresh clone. See the note in ../.gitignore.

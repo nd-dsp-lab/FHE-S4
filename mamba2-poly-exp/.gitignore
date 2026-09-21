@@ -4,8 +4,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# job logs: noisy, and they embed absolute cluster paths
-logs/
+# job logs: noisy, and they embed absolute cluster paths. But the DIRECTORY must
+# be tracked: every job script has `#$ -o logs/...`, and SGE's shepherd opens
+# that file BEFORE your script runs. If logs/ does not exist the job dies at
+# startup and writes no log at all -- which is what happened on a fresh clone,
+# and it looks exactly like "the job terminated immediately for no reason".
+# A `mkdir -p logs` inside the script is too late to help.
+logs/*
+!logs/.gitkeep
 *.log
 
 # Experiment outputs. The RESULT files (csv / metrics.json / config.json) are

@@ -33,6 +33,17 @@ edit.
 `q*` on this cluster are site wrappers, not the SGE binaries, and they do not
 behave the way the SGE manual says.)
 
+### A job that dies instantly and writes no log
+
+Every script here has `#$ -o logs/...`. SGE's shepherd opens that file **before**
+your script runs, and it will not create the directory. On a fresh clone with no
+`logs/` the job therefore fails at startup, and because the failure is in opening
+the log, there is no log to read -- it just looks like the job vanished. Confirm
+it with `qacct -j <jobid>`: `failed` will be a `26 : opening input/output file`.
+
+`mkdir -p logs` fixes it, and `logs/.gitkeep` is tracked so a clone has the
+directory already. A `mkdir` *inside* a job script is too late.
+
 The values this work actually used are in the project's own notes, not here.
 
 
