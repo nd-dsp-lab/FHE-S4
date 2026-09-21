@@ -25,7 +25,11 @@ import torch
 from baby_mamba.transition import ExactExp
 from real_mamba.data import get_blocks
 from real_mamba.eval_lm import evaluate, peak_memory_gb, reset_peak_memory
-from real_mamba.gates import build_per_channel_gates, build_squared_softplus
+from real_mamba.gates import (
+    build_fused_dt_gates,
+    build_per_channel_gates,
+    build_squared_softplus,
+)
 from real_mamba.model import DEFAULT_MODEL, iter_mixers, load_model, recommended_dtype
 from real_mamba.patch import mamba2_reference_forward, patch_transition
 from real_mamba.transitions import build_per_head_transitions
@@ -143,6 +147,14 @@ def main(argv=None) -> int:
                   (dep["softplus_in"] if has_sp else 0) + (dep["exp"] if has_exp else 0))
         return pre + (dep["silu_norm_in"] if has_sn else 0)
 
+    # The fused route replaces softplus AND exp with ONE per-head polynomial, so
+    # that path costs depth 2 instead of 2+2=4. Evaluated as its own config
+    # because it is a different factorisation, not an extra gate.
+    fused = build_fused_dt_gates(args.gate_stats, model, degree=args.degree,
+                                 margin=args.margin)
+    print(f"  {'fused softplus+exp':15s} depth {fused[0].ct_ct_depth} "
+          f"(vs {dep['softplus_in']}+{dep['exp']}={dep['softplus_in']+dep['exp']} separate)")
+
     configs = [
         ("baseline: everything exact",        False, False, False, False),
         ("exp only (the previous result)",    False, True,  False, False),
@@ -169,6 +181,31 @@ def main(argv=None) -> int:
                      "silu_conv": sc, "silu_norm": sn,
                      "degree": args.degree,
                      "per_layer_ct_ct_depth": d,
+                     "network_depth_24_layers": d * 24,
+                     "loss": r["loss"], "perplexity": r["perplexity"],
+                     "peak_gpu_gb": peak_memory_gb(args.device)})
+        print(f"  {label:34s} ppl {r['perplexity']:10.4f}   per-layer depth {d}")
+
+    # --- the fused alternative to (softplus -> exp) ------------------------
+    for label, extra in (("FUSED softplus+exp", {}),
+                         ("FUSED + SiLU(norm)", {"silu_norm_gate": G["silu_norm_in"]})):
+        for mixer in handle.mixers:
+            li = mixer.layer_idx
+            kw = dict(fused_dt_gate=fused[li])
+            for k, v in extra.items():
+                kw[k] = v[li]
+
+            def bound(u, _m=mixer, _kw=kw, inference_params=None, **ex):
+                return mamba2_reference_forward(_m, u, ExactExp(),
+                                                 chunk_size=args.chunk_size,
+                                                 **_kw, **ex)
+            mixer.forward = bound
+        r = evaluate(model, blocks, device=args.device, batch_size=args.batch_size,
+                     vocab_size=cfg.vocab_size)
+        d = fused[0].ct_ct_depth + (dep["silu_norm_in"] if extra else 0)
+        rows.append({"config": label, "softplus": "fused", "exp": "fused",
+                     "silu_conv": False, "silu_norm": bool(extra),
+                     "degree": args.degree, "per_layer_ct_ct_depth": d,
                      "network_depth_24_layers": d * 24,
                      "loss": r["loss"], "perplexity": r["perplexity"],
                      "peak_gpu_gb": peak_memory_gb(args.device)})

@@ -542,3 +542,31 @@ def build_squared_softplus(stats_path, q_degree=2, method="chebyshev", margin=0.
             list(zip(sd["min"], sd["max"])), q_degree=q_degree, method=method,
             margin=margin, trainable=trainable)
     return out
+
+
+def build_fused_dt_gates(stats_path, model, degree=4, method="chebyshev",
+                         margin=0.15, trainable=False):
+    """{layer_idx: FusedDtGate} from a collect_gate_stats.py JSON + the model.
+
+    Needs the model because A_h and dt_bias_h are folded into the fitted
+    function -- they are weights, so plaintext, so free to fold.
+    """
+    import json
+
+    from real_mamba.model import iter_mixers
+    st = json.loads(open(stats_path).read())
+    per = st["per_channel"]["dt_raw"]
+    out = {}
+    for layer, mixer in iter_mixers(model):
+        sd = per.get(str(layer))
+        if sd is None:
+            continue
+        ivs = []
+        for lo, hi in zip(sd["min"], sd["max"]):
+            mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo) * (1.0 + margin)
+            ivs.append((mid - half, mid + half))
+        A = (-torch.exp(mixer.A_log.float())).detach().cpu().numpy()
+        b = mixer.dt_bias.float().detach().cpu().numpy()
+        out[layer] = FusedDtGate.fit(A, b, ivs, degree=degree, method=method,
+                                     trainable=trainable)
+    return out

@@ -9,6 +9,7 @@ easy one.**
 | `softplus` → `Δ` | 1 / layer | **solved, this pass** | **+0.278** | 2 |
 | `SiLU` in the gated norm | 1 / layer | marginal | +1.69 | 2 |
 | `SiLU` after conv1d | 1 / layer | **not solved — unstable** | +3.95, but see below | 2 |
+| fused `softplus+exp` | 1 / layer | **not solved** (§7b) | +134 | **2** (vs 4) |
 | `RMSNorm` 1/√· | **2 / layer** + `norm_f` | **not attempted** | — | 6–15 est. |
 
 Measured on `state-spaces/mamba2-130m`, wikitext-2, degree 4, per-channel
@@ -146,6 +147,58 @@ untouched.** The exp result does not generalise to the other gates for free, and
 the reason differs per gate — a sign invariant for softplus, numerical fragility
 for SiLU-conv, dynamic range for RMSNorm.
 
+## 7b. The fused softplus+exp route: halves depth, fails on the same kind of invariant
+
+`FusedDtGate` approximates the whole per-head chain
+`x -> exp(A_h * softplus(x + b_h))` with ONE polynomial, so that path costs
+**depth 2 instead of 2+2 = 4**. It works mechanically and the depth saving is
+real. It also costs **+134 perplexity** (151.41 vs a 16.92 baseline).
+
+The error does scale with `|A|` as predicted, since large `|A|` makes the fused
+function nearly a step in `x`:
+
+| \|A\| bucket | heads | median max err | worst |
+|---|---|---|---|
+| < 0.5 | 377 | 0.0085 | 0.078 |
+| 0.5 – 2 | 95 | 0.0106 | 0.290 |
+| 2 – 8 | 57 | 0.0216 | 0.116 |
+| 8 – 100 | 21 | **0.114** | 0.193 |
+| > 100 | 26 | 0.031 | 0.150 |
+
+But the **decisive** problem is not accuracy, it is the invariant:
+
+> **401 of 576 heads produce `a > 1`**, and 74 produce `a < 0`.
+
+`a > 1` is the expanding recurrence again. The separate route never had this
+problem because it inherits it from `exp` itself: `exp(z)` for `z <= 0` is
+automatically in `(0, 1]`, and the narrow per-head intervals plus `pin_zero` kept
+`frac(a>1)` at exactly 0. Fusing throws that structure away and asks a raw
+polynomial to respect a **two-sided** bound it has no reason to respect.
+
+Fixing it needs a form that cannot leave `[0, 1]`. `Q(x)^2` gives `>= 0` only;
+`1 - S(x)^2` gives `<= 1` only; a reciprocal gives both but costs a division. No
+non-constant polynomial is bounded on all of R, so any such guarantee is
+interval-local — which is exactly why interval coverage dominates everything
+here. **The fused factorisation is not obviously salvageable at depth 2.**
+
+## 7c. The pattern, across all four gates
+
+This is the through-line and it is worth stating on its own:
+
+| gate | what actually broke it | the fix |
+|---|---|---|
+| `exp` | `P(0) = 0.966 != 1` -> spurious decay compounding to `0.966^1024` | pin `P(0) = 1` |
+| `softplus` | `Delta < 0` on 415/576 heads -> `a > 1` -> expansion | `Delta = Q(x)^2`, non-negative by construction |
+| fused `softplus+exp` | `a > 1` on 401/576 heads -> expansion | unsolved; needs a two-sided bound |
+| `SiLU` after conv1d | no invariant identified yet; numerically fragile | unsolved |
+
+**In every solved case the binding constraint was a structural invariant, not
+pointwise accuracy** — and in two of three, the fix that worked had *worse*
+pointwise error than the version that failed. Pointwise error has been a poor
+predictor at every single step of this project. That suggests the productive
+question for SiLU is not "how do I fit it better" but "what property must it
+satisfy that a polynomial does not".
+
 ## 8. Next, in priority order
 
 1. **SiLU-conv needs a different form, not a different margin.** The softplus fix
@@ -153,9 +206,9 @@ for SiLU-conv, dynamic range for RMSNorm.
    equivalent for SiLU? It is bounded below by −0.2785 and asymptotically linear
    above — a form like `x·σ̃(x)` with `σ̃` a bounded rational/squared
    approximation may respect that where a raw polynomial does not.
-2. **Evaluate `FusedDtGate`** (implemented, untested): one per-head polynomial
-   for `x → exp(A·softplus(x+b))`, halving that path's depth from 4 to 2 and
-   removing the |A|-amplification of softplus error.
+2. ~~Evaluate `FusedDtGate`~~ **Done — see §7b. It halves depth and costs +134
+   perplexity, because it violates `a <= 1` on 401/576 heads.** Reviving it needs
+   a two-sided-bounded form, which is an open design question.
 3. **More measurement data.** All of the above rests on 6 × 1024 tokens. The
    interval tails are exactly what the fragility is sensitive to.
 4. **RMSNorm**, as its own project.
