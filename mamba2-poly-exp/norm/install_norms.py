@@ -61,16 +61,50 @@ class NormHandle:
     originals: list = field(default_factory=list)   # (parent, attr, old_module)
     replacements: nn.ModuleDict = None
     gated_overrides: dict = field(default_factory=dict)
+    fused_saved: list = field(default_factory=list)  # (obj, previous fused_add_norm)
     stage: str = "exact"
 
     def restore(self):
         for parent, attr, old in self.originals:
             setattr(parent, attr, old)
+        for obj, flag in self.fused_saved:
+            obj.fused_add_norm = flag
         self.originals.clear()
+        self.fused_saved.clear()
         self.gated_overrides.clear()
         if self.model is not None and hasattr(self.model, "norm_replacements"):
             del self.model.norm_replacements
         self.stage = "exact"
+
+
+def _unfuse_add_norm(model, handle):
+    """Make the residual norms real module calls, or a replacement is ignored.
+
+    With fused_add_norm=True -- which mamba2-130m ships -- Block.forward never
+    calls self.norm(). It reads self.norm.weight and self.norm.bias and hands
+    them to layer_norm_fn (block.py:57); MixerModel.forward does the same for
+    norm_f (mixer_seq_simple.py:208). Swapping the module in therefore has NO
+    effect on the arithmetic.
+
+    Installing Path A this way raised `'ConstDivisorNorm' object has no
+    attribute 'bias'`, which was luck: had the replacement carried a .bias, the
+    fused kernel would have run EXACT RMSNorm with our weight, ignored the
+    constant divisor entirely, and reported a near-zero perplexity delta for an
+    operator that was never actually installed.
+
+    This is the same dependency that stopped Phase 1's forward pre-hooks from
+    firing. Fixed there first, and it applies identically here.
+    """
+    bb = getattr(model, "backbone", None)
+    if bb is None:
+        return
+    if hasattr(bb, "fused_add_norm"):
+        handle.fused_saved.append((bb, bb.fused_add_norm))
+        bb.fused_add_norm = False
+    for blk in getattr(bb, "layers", []):
+        if hasattr(blk, "fused_add_norm"):
+            handle.fused_saved.append((blk, blk.fused_add_norm))
+            blk.fused_add_norm = False
 
 
 def install_path_a(model, stats, stage="A3", precision_bits=None,
@@ -87,6 +121,7 @@ def install_path_a(model, stats, stage="A3", precision_bits=None,
         raise ValueError(f"stage must be one of {sorted(STAGES)}")
     sites = find_norm_sites(model)
     h = NormHandle(model=model, stage=stage)
+    _unfuse_add_norm(model, h)
     holder = {}
 
     # A missing site must be LOUD. This used to return the fallback in silence,
@@ -294,6 +329,7 @@ def install_path_b(model, stats, stage="B3", t_steps=2, precision_bits=None,
 
     sites = STAGES[stage.replace("B", "A")] if stage != "exact" else ()
     h = NormHandle(model=model, stage=stage)
+    _unfuse_add_norm(model, h)
     found = find_norm_sites(model)
     holder = {}
 
