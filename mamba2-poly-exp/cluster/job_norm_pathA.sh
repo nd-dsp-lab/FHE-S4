@@ -47,8 +47,19 @@ COMMON="--backend official --device cuda --dtype float32 \
 # Progressive: one operator group at a time, distilled between stages. Replacing
 # all 49 at once from the pretrained checkpoint is the thing most likely to fail
 # while telling you nothing about which site caused it.
-for BUDGET in 100000 1000000; do
-  for STAGE in A1 A2 A3; do
+#
+# Overridable so a single cheap stage can be run as a go/no-go before committing
+# hours to all seven. Phase 1 says A1 is the mildest site by a wide margin -- the
+# swing in 1/sqrt(v) a constant must absorb is 3.2x at norm_pre, 4.4x once
+# norm_gated joins, 6.1x with norm_f -- so if A1 fails, the rest are decided.
+#   qsub -v PATHA_STAGES=A1,PATHA_BUDGETS=100000,PATHA_AUX=0 cluster/job_norm_pathA.sh
+: "${PATHA_BUDGETS:=100000 1000000}"
+: "${PATHA_STAGES:=A1 A2 A3}"
+: "${PATHA_AUX:=1}"
+echo "[pathA] budgets='$PATHA_BUDGETS' stages='$PATHA_STAGES' aux=$PATHA_AUX"
+
+for BUDGET in $PATHA_BUDGETS; do
+  for STAGE in $PATHA_STAGES; do
     echo; echo "############ Path A $STAGE, $BUDGET tokens ############"
     python norm/distill_norm.py --path A --stage "$STAGE" \
         --token-budget "$BUDGET" $COMMON \
@@ -56,8 +67,10 @@ for BUDGET in 100000 1000000; do
   done
 done
 
-echo; echo "############ A3 with the auxiliary norm-matching term ############"
-python norm/distill_norm.py --path A --stage A3 --token-budget 1000000 \
-    --lambda-aux 1.0 $COMMON --outdir runs/norm_pathA/A3_1000000tok_aux1
+if [ "$PATHA_AUX" = "1" ]; then
+  echo; echo "############ A3 with the auxiliary norm-matching term ############"
+  python norm/distill_norm.py --path A --stage A3 --token-budget 1000000 \
+      --lambda-aux 1.0 $COMMON --outdir runs/norm_pathA/A3_1000000tok_aux1
+fi
 
 echo "path A finished at $(date)"
