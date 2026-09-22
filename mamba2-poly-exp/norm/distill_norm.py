@@ -182,20 +182,42 @@ def main(argv=None) -> int:
               f"({start[L] - base[L]:+.4f})")
 
     # ---------------- optimiser ------------------------------------------
-    c_params = [p for n, p in model.named_parameters()
-                if p.requires_grad and n.endswith("log_c")]
-    c_ids = {id(p) for p in c_params}
-    other = [p for p in model.parameters() if p.requires_grad and id(p) not in c_ids]
-    for p in model.parameters():
-        p.requires_grad_(False)
-    for p in c_params + other:
-        p.requires_grad_(True)
+    # Train ONLY the installed replacements: their log_c (or log_s) scalars and
+    # their gammas. Everything else is frozen.
+    #
+    # This used to read `other = [p for p in model.parameters() if
+    # p.requires_grad ...]`, evaluated while the pretrained model still had
+    # requires_grad=True everywhere -- so `other` became the whole network and
+    # the freeze/unfreeze below was a no-op. Job 1464468 reported
+    # "24 log_c scalars + 128,989,632 other" and fine-tuned all 129M parameters
+    # at the KD learning rate; perplexity went 240 -> 5833. The header comment
+    # in cluster/job_norm_pathA.sh says the trainable set is ~56k, which is what
+    # the design intended and what this now produces.
+    repl = getattr(model, "norm_replacements", None)
+    if repl is None:
+        raise RuntimeError("no norm_replacements on the model -- nothing was installed")
+    named = list(repl.named_parameters())
+    c_params = [q for n, q in named if n.endswith("log_c") or n.endswith("log_s")]
+    c_ids = {id(q) for q in c_params}
+    other = [q for _, q in named if id(q) not in c_ids]
+    for q in model.parameters():
+        q.requires_grad_(False)
+    for q in c_params + other:
+        q.requires_grad_(True)
     opt = torch.optim.AdamW(
         [{"params": c_params, "lr": args.c_lr, "weight_decay": 0.0},
          {"params": other, "lr": args.lr, "weight_decay": 0.0}], betas=(0.9, 0.95))
-    n_train = sum(p.numel() for p in c_params + other)
-    print(f"[train] {len(c_params)} log_c scalars + {sum(p.numel() for p in other):,} "
-          f"other = {n_train:,} trainable of {sum(p.numel() for p in model.parameters()):,}")
+    n_train = sum(q.numel() for q in c_params + other)
+    n_all = sum(q.numel() for q in model.parameters())
+    print(f"[train] {len(c_params)} scalars + {sum(q.numel() for q in other):,} "
+          f"gamma = {n_train:,} trainable of {n_all:,}")
+    # A run that quietly fine-tunes the backbone is not a test of the operator:
+    # any recovery could not be attributed to the replacement. Refuse loudly.
+    if n_train > 0.01 * n_all:
+        raise RuntimeError(
+            f"{n_train:,} of {n_all:,} parameters are trainable ({100*n_train/n_all:.1f}%). "
+            "Path A/B train only the installed replacements; this would be a "
+            "full fine-tune wearing the experiment's name.")
 
     tps = args.micro_batch * args.grad_accum * args.train_seq_len
     total_steps = max(1, args.token_budget // tps)
