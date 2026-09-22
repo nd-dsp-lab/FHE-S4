@@ -167,7 +167,7 @@ class PolyExp(nn.Module):
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """Evaluate P(z). Deliberately NOT Horner -- see the module docstring."""
-        c = self.coeffs.to(z.dtype)
+        c = self.coeffs.to(device=z.device, dtype=z.dtype)
 
         # powers[k] holds z^k. powers[1] = z is the input ciphertext.
         powers: dict[int, torch.Tensor] = {1: z}
@@ -674,8 +674,8 @@ class PerHeadPolyExp(nn.Module):
         """
         if z.shape[-1] != self.nheads:
             raise ValueError(f"expected last dim {self.nheads}, got {tuple(z.shape)}")
-        c = self.coeffs.to(z.dtype)                       # (H, deg+1)
-        z = z * self.inv_scales.to(z.dtype)               # ct x pt, no ct-ct depth
+        c = self.coeffs.to(device=z.device, dtype=z.dtype)                       # (H, deg+1)
+        z = z * self.inv_scales.to(device=z.device, dtype=z.dtype)               # ct x pt, no ct-ct depth
         powers: dict[int, torch.Tensor] = {1: z}
         for target, lo, hi in self.schedule.steps:
             powers[target] = powers[lo] * powers[hi]      # one ct-ct multiply each

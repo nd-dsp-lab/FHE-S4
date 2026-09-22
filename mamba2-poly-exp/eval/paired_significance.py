@@ -92,6 +92,28 @@ def main(argv=None) -> int:
     exp_gate = (build_per_head_transitions(args.exp_stats, args.degree, pin_zero=True)
                 if "exp" in args.gate else None)
 
+    # The gate builders construct on CPU; the model is already on args.device.
+    # Their buffers are registered, so nothing complains until the first forward
+    # dies with "found at least two devices, cuda:0 and cpu" -- which is exactly
+    # how the first GPU run of this script ended, after the exact baseline had
+    # already spent 37s on all 16 shards. The forwards now also carry the device
+    # on their casts, but doing it there would copy the coefficients host->device
+    # on every call, so move them once, here.
+    def _to_device(obj):
+        # the builders return {layer_idx: Module}; be tolerant of a bare module
+        # or a sequence too, since three different builders feed this
+        if isinstance(obj, dict):
+            for _m in obj.values():
+                _to_device(_m)
+        elif isinstance(obj, (list, tuple)):
+            for _m in obj:
+                _to_device(_m)
+        elif hasattr(obj, "to"):
+            obj.to(args.device)
+
+    for _g in list(G.values()) + ([exp_gate] if exp_gate is not None else []):
+        _to_device(_g)
+
     ph = patch_transition(model, ExactExp(), chunk_size=args.chunk_size)
 
     def install(gate_name):

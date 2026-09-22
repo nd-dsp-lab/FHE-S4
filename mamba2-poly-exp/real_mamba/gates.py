@@ -126,8 +126,8 @@ class ScalarPolyGate(nn.Module):
         return self._name
 
     def forward(self, x):
-        c = self.coeffs.to(x.dtype)
-        t = x * self.inv_scale.to(x.dtype)          # ct x pt, no ct-ct depth
+        c = self.coeffs.to(device=x.device, dtype=x.dtype)
+        t = x * self.inv_scale.to(device=x.device, dtype=x.dtype)          # ct x pt, no ct-ct depth
         powers = {1: t}
         for target, lo, hi in self.schedule.steps:
             powers[target] = powers[lo] * powers[hi]        # one ct-ct each
@@ -253,8 +253,8 @@ class FusedDtGate(nn.Module):
         dt_bias. Returns `a` directly."""
         if x.shape[-1] != self.nheads:
             raise ValueError(f"expected last dim {self.nheads}, got {tuple(x.shape)}")
-        c = self.coeffs.to(x.dtype)
-        t = x * self.inv_scales.to(x.dtype)
+        c = self.coeffs.to(device=x.device, dtype=x.dtype)
+        t = x * self.inv_scales.to(device=x.device, dtype=x.dtype)
         powers = {1: t}
         for target, lo, hi in self.schedule.steps:
             powers[target] = powers[lo] * powers[hi]
@@ -347,8 +347,8 @@ class PerChannelPolyGate(nn.Module):
     def forward(self, x):
         if x.shape[-1] != self.nchannels:
             raise ValueError(f"expected last dim {self.nchannels}, got {tuple(x.shape)}")
-        c = self.coeffs.to(x.dtype)
-        t = x * self.inv_scales.to(x.dtype)
+        c = self.coeffs.to(device=x.device, dtype=x.dtype)
+        t = x * self.inv_scales.to(device=x.device, dtype=x.dtype)
         powers = {1: t}
         for target, lo, hi in self.schedule.steps:
             powers[target] = powers[lo] * powers[hi]
@@ -484,8 +484,8 @@ class SquaredPolySoftplus(nn.Module):
     def forward(self, x):
         if x.shape[-1] != self.nheads:
             raise ValueError(f"expected last dim {self.nheads}, got {tuple(x.shape)}")
-        c = self.coeffs.to(x.dtype)
-        t = x * self.inv_scales.to(x.dtype)
+        c = self.coeffs.to(device=x.device, dtype=x.dtype)
+        t = x * self.inv_scales.to(device=x.device, dtype=x.dtype)
         powers = {1: t}
         for target, lo, hi in self.schedule.steps:
             powers[target] = powers[lo] * powers[hi]
