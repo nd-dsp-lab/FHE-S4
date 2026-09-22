@@ -792,3 +792,55 @@ The first "verification" of that second claim was `git ls-files` run in a
 directory that is not a git repository; it exited 128 with no output and I read
 empty output as "nothing tracked". `qacct` is unavailable on this cell, so job
 logs are the only record — read them before theorising.
+
+---
+
+## Milestone: Phase 0b complete — the paired table, and three verdicts overturned
+
+**Implemented.** `eval/paired_significance.py` run on GPU, 16 shards, both
+lengths, all four gates (job 1464457).
+
+**The result.**
+
+```
+     L       gate   mean d ppl   std of d   SEM of d     2*SEM            verdict
+   512        exp      -0.0000     0.0027     0.0007    0.0014   not distinguishable
+   512   softplus      +0.5908     0.0995     0.0249    0.0498          SIGNIFICANT
+   512  silu_norm      +4.5492     0.9276     0.2319    0.4638          SIGNIFICANT
+   512  silu_conv      +5.8465     2.5982     0.6495    1.2991          SIGNIFICANT
+  2048        exp      +0.0002     0.0022     0.0006    0.0011   not distinguishable
+  2048   softplus      +0.4988     0.0967     0.0242    0.0483          SIGNIFICANT
+  2048  silu_norm      +3.6396     0.7194     0.1799    0.3597          SIGNIFICANT
+  2048  silu_conv      +5.8416     2.7968     0.6992    1.3984          SIGNIFICANT
+```
+
+**Learned.**
+
+*The exp gate result is stronger than we could previously state.* It is the
+only operator in the model that is indistinguishable from exact, and the bound
+is now tight: `|Δppl| < 0.0015` at **both** lengths, about 100× narrower than
+what the unpaired floor could resolve. The headline claim of this project
+survives a test built specifically to break it.
+
+*Three verdicts in GATES.md were wrong and are now corrected.* softplus,
+SiLU-norm and SiLU-conv were recorded at +0.278 / +1.69 / +3.95 and described
+as within the evaluation noise. That used the unpaired floor (2σ ≈ 5.5) — the
+spread of perplexity across *different text* — which is far too lenient for an
+operator swap where both models see the same tokens with the same weights.
+Paired, all three are SIGNIFICANT: **+0.59 / +4.55 / +5.85**. The squared
+softplus is still a large improvement over the `inf` it replaced, but calling
+it "within noise" was an artefact of the wrong yardstick.
+
+**A caveat on the error bar itself, which the table does not show.** The CPU
+run at 8 shards × 61 blocks gave softplus +0.4663 ± 0.0562; this GPU run at
+16 shards × 30 blocks gives +0.5908 ± 0.0498. Those intervals do not overlap.
+So the paired SEM measures shard-to-shard variation *within one sharding
+configuration* and understates run-to-run variation *across* configurations.
+The qualitative conclusions are unaffected — exp indistinguishable at 2·SEM =
+0.0014, the others significant by 10× or more — but the third decimal place of
+any of these deltas should not be quoted as reproducible.
+
+**Still uncertain.** Whether re-fitting SiLU at higher degree, or with a
+different structural form, recovers the gap. Nothing here says the SiLU sites
+are unreplaceable — only that the current fits are not free, and were never
+measured against the right baseline.

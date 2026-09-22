@@ -6,7 +6,7 @@
 WHY THE UNPAIRED FLOOR IS THE WRONG YARDSTICK
 ---------------------------------------------
 eval/noise_floor.py measures how much perplexity varies BETWEEN disjoint shards
-of the same corpus with the model untouched: 2 sigma = 4.92 at L=512. That is a
+of the same corpus with the model untouched: 2 sigma = 5.50 at L=512. That is a
 real and useful number -- it says a single perplexity figure quoted to four
 decimal places is meaningless as an absolute.
 
@@ -193,9 +193,10 @@ def main(argv=None) -> int:
             print(f"{L:>6} {g:>10} {r['mean_delta_ppl']:+12.4f} {r['std_delta_ppl']:10.4f} "
                   f"{r['sem_delta']:10.4f} {2*r['sem_delta']:9.4f} {v:>32}")
     print("-" * len(hdr))
-    print("Compare against the UNPAIRED floor (2 sigma = 4.92 at L=512): the paired")
-    print("std of the difference is the correct error bar, and it is far smaller,")
-    print("because shard difficulty cancels between the two models.")
+    print("Compare against the UNPAIRED floor (2 sigma = 5.50 at L=512, 4.14 at")
+    print("L=2048, 16 shards on GPU): the paired std of the difference is the")
+    print("correct error bar, and it is ~100x smaller for the exp gate, because")
+    print("shard difficulty cancels between the two models.")
     print(f"\nwrote {args.out}")
     return 0
 

@@ -6,9 +6,9 @@ easy one.**
 | gate | instances | status | best Δ perplexity | depth |
 |---|---|---|---|---|
 | `exp(A·Δ)` | 1 / layer | **solved** (previous work) | **+0.0002** | 2 |
-| `softplus` → `Δ` | 1 / layer | **solved, this pass** | **+0.278** | 2 |
-| `SiLU` in the gated norm | 1 / layer | marginal | +1.69 | 2 |
-| `SiLU` after conv1d | 1 / layer | **not solved — unstable** | +3.95, but see below | 2 |
+| `softplus` → `Δ` | 1 / layer | **works, but a real regression** | **+0.59** (significant) | 2 |
+| `SiLU` in the gated norm | 1 / layer | **not solved** | +4.55 (significant) | 2 |
+| `SiLU` after conv1d | 1 / layer | **not solved — unstable** | +5.85 (significant), see below | 2 |
 | fused `softplus+exp` | 1 / layer | **not solved** (§7b) | +134 | **2** (vs 4) |
 | `RMSNorm` 1/√· | **2 / layer** + `norm_f` | **not attempted** | — | 6–15 est. |
 
@@ -137,9 +137,18 @@ its own effort rather than being bolted onto this pass.
 Exact baseline 18.1368. Best per gate, individually, no training:
 
 - exp **+0.0002** ✓
-- softplus **+0.278** ✓
-- SiLU-norm **+1.69** ⚠
-- SiLU-conv **+3.95** at a knife-edge margin ✗
+- softplus **+0.59** — a real regression, not noise ⚠
+- SiLU-norm **+4.55** — significant ✗
+- SiLU-conv **+5.85** at a knife-edge margin ✗
+
+> **These verdicts were revised on 2026-09-22.** They previously read +0.278,
+> +1.69 and +3.95 and were described as within the evaluation noise. That
+> comparison used the UNPAIRED floor (2σ ≈ 5.5), which is the spread of
+> perplexity across *different text* and far too lenient for an operator swap
+> where both models see the same tokens with the same weights. Measured
+> properly, paired, at 16 shards and both lengths, all three are SIGNIFICANT.
+> Only the exp gate survives: |Δppl| < 0.0015 at both lengths. See the paired
+> table in PROGRESS.md.
 - all four together: **inf** — the errors compound
 
 So the honest position: **two of four solved, one marginal, one unsolved, one
