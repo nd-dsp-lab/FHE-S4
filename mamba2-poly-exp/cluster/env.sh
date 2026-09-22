@@ -64,8 +64,18 @@ if [ -d "$FHEMAMBA_HF_HOME_DEFAULT" ]; then
   export HF_HOME="${HF_HOME:-$FHEMAMBA_HF_HOME_DEFAULT}"
 else
   export HF_HOME="${HF_HOME:-${HOME}/.cache/huggingface}"
-  echo "[env] WARNING: $FHEMAMBA_HF_HOME_DEFAULT missing; falling back to \$HOME cache"
 fi
+# Warn only if HF_HOME ACTUALLY ended up under $HOME, which is the 100 G
+# filesystem that has hit 96% twice. The old warning fired whenever this repo
+# had no hf-cache/ of its own and announced "falling back to $HOME cache" even
+# when the job had already exported HF_HOME to the group space -- which is the
+# usual case, so the alarming line appeared on a perfectly healthy run.
+case "$HF_HOME" in
+  "$HOME"/*)
+    echo "[env] WARNING: HF_HOME is $HF_HOME, on \$HOME (100 G, has hit 96%)."
+    echo "[env]          Prefer the group space: export HF_HOME=/groups/tjung/\$USER/FHEMAMBA/hf-cache"
+    ;;
+esac
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"   # everything is pre-fetched from crcfe01
 export PYTHONNOUSERSITE=1                      # ignore ~/.local, which can shadow the env
 
