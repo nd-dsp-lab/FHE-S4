@@ -89,10 +89,18 @@ def install_path_a(model, stats, stage="A3", precision_bits=None,
     h = NormHandle(model=model, stage=stage)
     holder = {}
 
+    # A missing site must be LOUD. This used to return the fallback in silence,
+    # and the Phase 1 stats really did lack norm_pre and norm_f (their hooks
+    # never fired under fused_add_norm), so stage A1 would have initialised all
+    # 24 constants to 1.0 while the run reported itself as "initialised from
+    # Phase 1 measurement". The median sqrt(v) it should have used is ~6.5.
+    _missing = []
+
     def c_init_for(site, layer, fallback=1.0):
         try:
             return stats[site][str(layer)]["sqrt_median"]
         except (KeyError, TypeError):
+            _missing.append(f"{site}[{layer}]")
             return fallback
 
     for site in STAGES[stage]:
@@ -117,11 +125,20 @@ def install_path_a(model, stats, stage="A3", precision_bits=None,
     h.replacements = nn.ModuleDict(holder)
     ref = next(model.parameters())
     model.norm_replacements = h.replacements.to(device=ref.device)
+    if _missing:
+        print(f"[norm] WARNING: {len(_missing)} of {len(holder)} instances had NO "
+              f"Phase 1 statistics and fell back to c=1.0, which is NOT a measured "
+              f"initialisation: {', '.join(_missing[:6])}"
+              f"{' ...' if len(_missing) > 6 else ''}")
+        print("[norm]          Rerun norm/collect_norm_stats.py -- if a whole site "
+              "is missing its hooks never fired. Do not report this run as "
+              "initialised from measurement.")
     if verbose:
         cs = [float(m.c) for m in holder.values()]
         print(f"[norm] stage {stage}: replaced {len(holder)} instances "
               f"({', '.join(STAGES[stage])}); c init range "
-              f"[{min(cs):.4g}, {max(cs):.4g}]; ct-ct depth 0 each")
+              f"[{min(cs):.4g}, {max(cs):.4g}]; ct-ct depth 0 each"
+              f"{'  <- SEE WARNING ABOVE' if _missing else ''}")
     return h
 
 
@@ -280,10 +297,13 @@ def install_path_b(model, stats, stage="B3", t_steps=2, precision_bits=None,
     found = find_norm_sites(model)
     holder = {}
 
+    _missing_s = []
+
     def s_init_for(site, layer, fallback=1.0):
         try:
             return stats[site][str(layer)]["median"]
         except (KeyError, TypeError):
+            _missing_s.append(f"{site}[{layer}]")
             return fallback
 
     for site in sites:
@@ -308,6 +328,12 @@ def install_path_b(model, stats, stage="B3", t_steps=2, precision_bits=None,
     h.replacements = nn.ModuleDict(holder)
     ref = next(model.parameters())
     model.norm_replacements = h.replacements.to(device=ref.device)
+    if _missing_s:
+        print(f"[norm] WARNING: {len(_missing_s)} of {len(holder)} instances had NO "
+              f"Phase 1 statistics; the prescale fell back to s=1.0, which puts "
+              f"v/s outside the Newton convergence basin [0.25, 2.0] for any layer "
+              f"whose median v is not ~1: {', '.join(_missing_s[:6])}"
+              f"{' ...' if len(_missing_s) > 6 else ''}")
     if verbose and holder:
         d = next(iter(holder.values())).ct_ct_depth
         print(f"[norm] stage {stage}: replaced {len(holder)} instances with "
