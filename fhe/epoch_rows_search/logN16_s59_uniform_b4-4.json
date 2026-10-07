@@ -1,0 +1,32 @@
+{
+  "step": "STEP 1 -- usable CKKS epoch after bootstrapping",
+  "logN": 16,
+  "ring_dim_requested": 65536,
+  "scaling_mod_bits": 59,
+  "first_mod_bits": 60,
+  "secret_key_dist": "uniform",
+  "level_budget": [
+    4,
+    4
+  ],
+  "scaling_technique": "FLEXIBLEAUTO",
+  "security_level": "HEStd_128_classic",
+  "native_int_bits": 64,
+  "omp_max_threads": 1,
+  "timing_label": "CPU-ONLY, NON-TRANSFERABLE: says nothing about GPU latency",
+  "status": "error",
+  "bootstrap_depth": 22,
+  "search_seconds_cpu_only": 4.2542e-05,
+  "search_ladder_logQP": [],
+  "search_first_rejection": "levelsAfter=1: library refused: /private/tmp/claude-501/-Users-jiachenzhao-research-FHEMAMBA/d84d7456-b65e-4fb7-b89c-beeab46a69b3/scratchpad/ofhe/src/src/pke/lib/scheme/ckksrns/ckksrns-parametergeneration.cpp:l.153:ParamsGenCKKSRNSInternal(): The specified ring dimension (65536) does not comply with HE standards recommendation (131072).",
+  "error": "no levelsAfter >= 1 fits at this ring dimension: levelsAfter=1: library refused: /private/tmp/claude-501/-Users-jiachenzhao-research-FHEMAMBA/d84d7456-b65e-4fb7-b89c-beeab46a69b3/scratchpad/ofhe/src/src/pke/lib/scheme/ckksrns/ckksrns-parametergeneration.cpp:l.153:ParamsGenCKKSRNSInternal(): The specified ring dimension (65536) does not comply with HE standards recommendation (131072).",
+  "peak_rss_mb_at_error": 4.046875,
+  "driver": {
+    "exit_code": 3,
+    "timed_out": false,
+    "wall_seconds_cpu_only": 0.0,
+    "external_peak_rss_mb": null,
+    "log": "fhe/epoch_rows_search/logN16_s59_uniform_b4-4.log",
+    "signal": null
+  }
+}

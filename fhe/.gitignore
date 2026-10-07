@@ -1,0 +1,11 @@
+# The root .gitignore ignores every *.json. For STEP 1 the JSON IS the deliverable,
+# and a blanket rule like that has already silently dropped 64 result files from
+# this repo once. Re-include the results explicitly.
+!epoch_search.json
+!epoch_results.json
+!epoch_rows_search/*.json
+!epoch_rows_results/*.json
+# per-run logs embed local paths; smoke runs are insecure by design and never results
+epoch_rows_*/*.log
+epoch_smoke.json
+epoch_rows_smoke/

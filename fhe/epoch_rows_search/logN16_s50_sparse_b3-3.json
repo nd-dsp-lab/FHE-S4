@@ -1,0 +1,49 @@
+{
+  "step": "STEP 1 -- usable CKKS epoch after bootstrapping",
+  "logN": 16,
+  "ring_dim_requested": 65536,
+  "scaling_mod_bits": 50,
+  "first_mod_bits": 51,
+  "secret_key_dist": "sparse",
+  "level_budget": [
+    3,
+    3
+  ],
+  "scaling_technique": "FLEXIBLEAUTO",
+  "security_level": "HEStd_128_classic",
+  "native_int_bits": 64,
+  "omp_max_threads": 1,
+  "timing_label": "CPU-ONLY, NON-TRANSFERABLE: says nothing about GPU latency",
+  "status": "search_only_done",
+  "bootstrap_depth": 16,
+  "search_seconds_cpu_only": 1.39251075,
+  "search_ladder_logQP": [
+    1262,
+    1312,
+    1362,
+    1412,
+    1522,
+    1572,
+    1622,
+    1732
+  ],
+  "search_first_rejection": "levelsAfter=9: library refused: /private/tmp/claude-501/-Users-jiachenzhao-research-FHEMAMBA/d84d7456-b65e-4fb7-b89c-beeab46a69b3/scratchpad/ofhe/src/src/pke/lib/scheme/ckksrns/ckksrns-parametergeneration.cpp:l.153:ParamsGenCKKSRNSInternal(): The specified ring dimension (65536) does not comply with HE standards recommendation (131072).",
+  "epoch_declared": 8,
+  "multiplicative_depth_total": 24,
+  "ring_dim_actual": 65536,
+  "log2_Q": 1252,
+  "log2_P": 480,
+  "log2_QP": 1732,
+  "num_Q_primes": 25,
+  "num_P_primes": 8,
+  "max_log2_QP_128bit": 1747,
+  "modulus_margin_bits": 15,
+  "driver": {
+    "exit_code": 0,
+    "timed_out": false,
+    "wall_seconds_cpu_only": 1.6,
+    "external_peak_rss_mb": null,
+    "log": "fhe/epoch_rows_search/logN16_s50_sparse_b3-3.log",
+    "signal": null
+  }
+}
