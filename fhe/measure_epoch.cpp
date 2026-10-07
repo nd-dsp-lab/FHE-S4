@@ -206,6 +206,13 @@ struct Cfg {
     int nBoots       = 5;
     int maxMults     = 80;
     double correctTol = 0.01;  // a decrypted slot counts as correct if |err| < this
+    // Iterative bootstrapping (OpenFHE's iterative-ckks-bootstrapping example):
+    // a second pass bootstraps the residual error and roughly doubles precision,
+    // for one extra level per extra iteration. iterPrecision 0 = measure a
+    // single-pass bootstrap first and use floor(mean-abs bits) - 5, which is the
+    // example's own procedure and buffer.
+    uint32_t iterations    = 1;
+    uint32_t iterPrecision = 0;
     bool insecure    = false;
     bool searchOnly  = false;
     bool skipKeySize = false;
@@ -252,6 +259,8 @@ static Cfg parse_args(int argc, char** argv) {
         else if (a == "--max-mults")    c.maxMults = std::stoi(next());
         else if (a == "--correct-tol")  c.correctTol = std::stod(next());
         else if (a == "--seed")         c.seed = std::stoul(next());
+        else if (a == "--iterations")   c.iterations = std::stoul(next());
+        else if (a == "--iter-precision") c.iterPrecision = std::stoul(next());
         else if (a == "--out")          c.out = next();
         else if (a == "--insecure")     c.insecure = true;
         else if (a == "--search-only")  c.searchOnly = true;
@@ -265,6 +274,8 @@ static Cfg parse_args(int argc, char** argv) {
         else
             throw std::invalid_argument("unknown argument " + a);
     }
+    if (c.iterations < 1)
+        throw std::invalid_argument("--iterations must be >= 1");
     if (c.firstMod == 0)
         c.firstMod = c.scale + 1;
     if (c.insecure && c.levelsAfter < 0)
@@ -392,8 +403,10 @@ int main(int argc, char** argv) {
 
     try {
         const SecretKeyDist skd = dist_of(c);
-        const uint32_t bootDepth = FHECKKSRNS::GetBootstrapDepth(c.budget, skd);
+        // Each extra bootstrap iteration costs one more level (OpenFHE example).
+        const uint32_t bootDepth = FHECKKSRNS::GetBootstrapDepth(c.budget, skd) + (c.iterations - 1);
         row.integer("bootstrap_depth", bootDepth);
+        row.integer("bootstrap_iterations", c.iterations);
 
         // ------------------------------------------------------------ SEARCH
         // Linear, not binary, so the whole ladder is visible: the first rejection
@@ -520,8 +533,26 @@ int main(int argc, char** argv) {
         }
 
         // ------------------------------------------------------------ BOOTSTRAP x1
+        uint32_t iterP = c.iterPrecision;
+        if (c.iterations > 1 && iterP == 0) {
+            auto single = cc->EvalBootstrap(ct);
+            Plaintext so;
+            cc->Decrypt(kp.secretKey, single, &so);
+            Prec ps = precision(x, so, c.correctTol);
+            row.num("precision_bits_max_single_pass", ps.bitsMax);
+            row.num("precision_bits_mean_single_pass", ps.bitsMean);
+            int pp = static_cast<int>(std::floor(ps.bitsMean)) - 5;
+            if (pp < 1)
+                throw std::runtime_error("single-pass precision too low to iterate: " + std::to_string(ps.bitsMean));
+            iterP = static_cast<uint32_t>(pp);
+        }
+        if (c.iterations > 1)
+            row.integer("iteration_precision_used", iterP);
+        auto boot = [&](const Ciphertext<DCRTPoly>& in) {
+            return c.iterations > 1 ? cc->EvalBootstrap(in, c.iterations, iterP) : cc->EvalBootstrap(in);
+        };
         t0      = Clock::now();
-        auto b1 = cc->EvalBootstrap(ct);
+        auto b1 = boot(ct);
         row.num("time_one_bootstrap_s_cpu_only", secs_since(t0));
         const long long declared = levels_remaining(b1, depth);
         row.integer("levels_after_bootstrap_declared", declared);
@@ -543,7 +574,7 @@ int main(int argc, char** argv) {
             auto cur = b1;
             for (int k = 2; k <= c.nBoots; ++k) {
                 try {
-                    cur = cc->EvalBootstrap(cur);
+                    cur = boot(cur);
                     Plaintext o;
                     cc->Decrypt(kp.secretKey, cur, &o);
                     Prec pk = precision(x, o, c.correctTol);

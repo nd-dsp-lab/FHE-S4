@@ -73,9 +73,10 @@ def git_commit() -> str:
         return "unknown"
 
 
-def config_name(logn, scale, skdist, budget, insecure=False) -> str:
+def config_name(logn, scale, skdist, budget, insecure=False, iters=1) -> str:
     b = budget.replace(",", "-")
-    return f"{'SMOKE_' if insecure else ''}logN{logn}_s{scale}_{skdist}_b{b}"
+    it = f"_it{iters}" if iters and iters > 1 else ""
+    return f"{'SMOKE_' if insecure else ''}logN{logn}_s{scale}_{skdist}_b{b}{it}"
 
 
 def external_time_cmd() -> list[str]:
@@ -89,7 +90,7 @@ def external_time_cmd() -> list[str]:
 
 
 def run_one(args, binary, logn, scale, skdist, budget, rows_dir: Path) -> dict:
-    name = config_name(logn, scale, skdist, budget, args.smoke)
+    name = config_name(logn, scale, skdist, budget, args.smoke, args.iterations)
     row_path = rows_dir / f"{name}.json"
     log_path = rows_dir / f"{name}.log"
     done_states = {"search_only_done"} if args.search_only else {"ok"}
@@ -105,7 +106,8 @@ def run_one(args, binary, logn, scale, skdist, budget, rows_dir: Path) -> dict:
         row_path.unlink()
 
     cmd = [str(binary), "--logn", str(logn), "--scale", str(scale), "--skdist", skdist,
-           "--budget", budget, "--boots", str(args.boots), "--out", str(row_path)]
+           "--budget", budget, "--boots", str(args.boots), "--out", str(row_path),
+           "--iterations", str(args.iterations)]
     if args.search_only:
         cmd.append("--search-only")
     if args.smoke:
@@ -170,7 +172,7 @@ def summarize(rows: list[dict]) -> str:
     for r in rows:
         name = config_name(r.get("logN"), r.get("scaling_mod_bits"), r.get("secret_key_dist"),
                            ",".join(str(v) for v in r.get("level_budget", [])),
-                           "NotSet" in str(r.get("security_level", "")))
+                           "NotSet" in str(r.get("security_level", "")), r.get("bootstrap_iterations", 1))
 
         def f(k, fmt="{:.1f}"):
             v = r.get(k)
@@ -194,6 +196,7 @@ def main() -> int:
     ap.add_argument("--skdists", nargs="+", default=["sparse", "uniform"])
     ap.add_argument("--budgets", nargs="+", default=["3,3", "4,4"])
     ap.add_argument("--boots", type=int, default=5)
+    ap.add_argument("--iterations", type=int, default=1, help="bootstrap iterations (2 ~ doubles precision)")
     ap.add_argument("--timeout", type=int, default=3 * 3600, help="seconds per configuration")
     ap.add_argument("--search-only", action="store_true", help="EPOCH only: no keys, no bootstraps")
     ap.add_argument("--smoke", action="store_true",
