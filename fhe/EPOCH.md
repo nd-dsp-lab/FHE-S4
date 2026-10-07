@@ -1,10 +1,43 @@
 # STEP 1 — the usable CKKS epoch after bootstrapping
 
-**Status (2026-10-06): the EPOCH search is done at N = 2^16 and 2^17. Precision has
-only been measured at a small, insecure N = 2^12. The 2^17 verification run — a
-real bootstrap, an empirical level count, precision after 1 and 5 bootstraps, and
-key memory — is still pending.** Until that run exists, every EPOCH below is
-*declared by the library*, not yet *consumed*.
+**Status (2026-10-06): measured.** The EPOCH search covers N = 2^16 and 2^17 on
+OpenFHE 1.2.1 (tjws-03) and 1.6.0, which agree row for row. The recommended
+configuration was then **bootstrapped for real at N = 2^17** on tjws-03: the EPOCH
+was confirmed by consuming levels, and precision, repeated-bootstrap decay and key
+memory were measured. Results are in `epoch_results.json`.
+
+## Result 0 — the verification run (N = 2^17, Δ = 2^59, {3,3}, 128-bit, OpenFHE 1.2.1)
+
+This is the headline. Everything else in this file is context for it.
+
+| | uniform secret | sparse secret |
+|---|---|---|
+| bootstrap consumes | 20 levels | 16 levels |
+| **EPOCH, declared** | **23** | **27** |
+| **EPOCH, consumed** (multiplies that still decrypt correctly) | **23** ✓ | **27** ✓ |
+| **precision after 1 bootstrap**, −log2(max abs err) | **8.0 bits** | **15.3 bits** |
+| precision, −log2(mean abs err) | 11.4 bits | 18.2 bits |
+| precision after bootstraps 1→5 | 8.0, 8.2, 8.1, 8.3, 8.1 | 15.3, 15.2, 15.2, 15.5, 15.3 |
+| precision across all EPOCH levels | flat, 8.0–8.4 | flat, 14.9–15.5 |
+| log2(QP) / 128-bit bound | 3497 / 3523 (margin 26) | 3497 / 3523 (margin 26) |
+| **evaluation keys** (serialized) | **55.9 GB** (55.6 rotation + 0.35 relin) | 55.9 GB |
+| **peak host memory** | **93.6 GB** | **94.7 GB** |
+| one bootstrap, setup, keygen *(CPU-only, 20 threads, non-transferable)* | 96 s, 22 s, 59 s | 88 s, 24 s, 65 s |
+
+Three findings, in order of how much they change the plan:
+
+1. **Keys do not fit the GPU target.** 55.9 GB of evaluation keys against a 24 GB
+   card, before any rotation keys the model's own matrix-vector products will need.
+   Almost all of it (55.6 GB) is the bootstrapping rotation keys.
+2. **Precision is much lower at real N than at toy N.** At N = 2^12 the same
+   settings gave 14.6 / 22.8 bits; at 2^17 they give **8.0 / 15.3**. The maximum
+   is taken over 65,536 slots instead of 2,048, and bootstrap error grows with N.
+   **8 bits** is a max error of 2^−8 ≈ 0.004 on values in [−1, 1]. Whether the model
+   tolerates that is unmeasured.
+3. **Neither the EPOCH nor the precision decays.** Declared and consumed EPOCH agree
+   exactly. Precision is flat across 5 consecutive bootstraps and across every
+   level of the EPOCH. A 24-layer model that refreshes 24+ times loses nothing to
+   repetition: the cost of a bootstrap is a fixed precision floor, not a drift.
 
 ## What the EPOCH is, in one paragraph
 
@@ -50,7 +83,10 @@ total modulus against the HE-standard maximum for that ring dimension.
 At N = 2^16 a uniform secret does not fit at all: the library reports that even one
 level after bootstrapping needs N = 2^17.
 
-## Result 2 — precision after one bootstrap (N = 2^12, INSECURE, smoke only)
+## Result 2 — precision at a toy ring dimension (N = 2^12, INSECURE, smoke only)
+
+**Superseded by Result 0 for N = 2^17. Kept because it shows the trend across scales,
+and because it is too optimistic by 7 bits — a warning about toy-N measurements.**
 
 Full slot count, values uniform in [−1, 1], −log2(max abs error):
 
@@ -85,14 +121,33 @@ the brief forbids.
 | N = 2^17, uniform secret | 21–23 | **15–26 → refresh must bracket the scan** |
 | N = 2^17, sparse secret | 25–27 | 15–26, with {3,3} landing exactly on ~27 |
 
-**We are in the middle case: N = 2^17, EPOCH ≈ 21–27.** With the scan costing
-log2(L) ≈ 10–11 levels (Sklansky, L = 1024–2048), the rest of a block gets
-EPOCH − scan ≈ **10–17 levels** per refresh, depending on the secret distribution.
+**We are in the middle case, now measured: N = 2^17, EPOCH = 23 (uniform) or 27
+(sparse).** With the scan costing log2(L) ≈ 10–11 levels (Sklansky, L = 1024–2048),
+the rest of a block gets EPOCH − scan ≈ **12–13 levels (uniform) or 16–17 (sparse)**
+per refresh.
 
-**Recommended configuration (provisional):** N = 2^17, Δ = 2^59, level budget
-{3,3}. Uniform secret if the security argument has to be the HE standard
-(EPOCH 23, ~15 bits); sparse if a separate security analysis is accepted
-(EPOCH 27, ~23 bits). See the first caveat below.
+**Recommended configuration:** N = 2^17, Δ = 2^59, level budget {3,3}, **uniform
+secret** — EPOCH 23, 8.0 bits. Sparse buys 4 levels and 7 bits, but its 128-bit
+security is not established by the check OpenFHE performs (first caveat below).
+
+**The decision gate is passed on levels and not yet passed on precision or memory.**
+8 bits may be too few, and 56 GB of keys is 2.3× the GPU. Both have known levers,
+listed below; neither has been tried.
+
+## Levers, untried
+
+* **Precision: iterative bootstrapping.** OpenFHE's `EvalBootstrap(ct, 2, precision)`
+  runs a second correction pass and roughly doubles precision (per OpenFHE's
+  `iterative-ckks-bootstrapping` example), at the cost of one level and about 2×
+  bootstrap time. Uniform 8 → ~16 bits for EPOCH 23 → 22, if it holds at 2^17.
+* **Precision requirement: measure it, don't guess.** Inject noise at 2^−8 and 2^−15
+  at every refresh point in the plaintext model and read the paired Δppl. That says
+  whether 8 bits is already enough.
+* **Key memory: a larger level budget.** {4,4} or {5,5} spends more levels per
+  bootstrap on the linear transforms and needs fewer rotation keys. That trades
+  EPOCH for memory, and the size of the trade is unmeasured.
+* **Key memory: fewer slots.** Bootstrapping keys scale with the slot count being
+  refreshed; a sparsely packed ciphertext needs fewer.
 
 ## What is still uncertain
 
@@ -100,11 +155,11 @@ EPOCH − scan ≈ **10–17 levels** per refresh, depending on the secret distr
    HE-standard table as uniform ones. That table assumes a uniform ternary secret,
    so this check does not establish 128-bit security for a sparse secret. The
    sparse rows' extra 4 levels and 8 bits come with an open security question.
-2. **Nothing at N = 2^17 has been bootstrapped yet.** The EPOCH is declared, not
-   consumed; precision and key memory at 2^17 are unknown. Key memory decides
-   whether this fits the 24 GB GPU target at all.
-3. **Library version.** Measured with OpenFHE 1.6.0. The workstation install may be
-   older, and bootstrapping depth has changed between versions.
+2. **One configuration verified.** {3,3} only, both secrets. {4,4} would trade
+   ~2 levels for less key memory; not yet measured.
+3. **Library version.** The EPOCH search agrees exactly between 1.2.1 and 1.6.0.
+   The verification run is 1.2.1 only. Precision differed slightly between versions
+   in smoke tests (6.8 vs 5.2 bits at scale 50, uniform, N = 2^12).
 4. **GPU library.** Phantom has no bootstrapping; DESILO is commercial. CPU timings
    say nothing about GPU latency, and none are used in any conclusion here.
 

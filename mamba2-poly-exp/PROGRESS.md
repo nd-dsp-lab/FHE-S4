@@ -723,3 +723,47 @@ remote login shell ate a `$(qsub ...)` command substitution.
 no CKKS parameters, noise budget or latency behind it. `frac(a<0) ≈ 0.008` is
 unexplained. The MODE B/C post-fine-tuning `frac(a>1)` regression still has no
 re-fit experiment. English only, one architecture family.
+
+---
+
+## Milestone: STEP 1 — the usable CKKS epoch, measured (2026-10-06)
+
+Full report: `fhe/EPOCH.md`. Code and raw rows: `fhe/` on branch `ckks-epoch`.
+
+**What was measured.** A real CKKS bootstrap at 128-bit security, OpenFHE 1.2.1 on
+tjws-03, N = 2^17, Δ = 2^59, level budget {3,3}, for both secret distributions.
+Also the EPOCH search over N ∈ {2^16, 2^17} × scale ∈ {40, 50, 59} × secret ×
+budget, which agrees exactly between OpenFHE 1.2.1 and 1.6.0.
+
+| | uniform | sparse |
+|---|---|---|
+| EPOCH (declared = consumed) | **23** | **27** |
+| precision after bootstrap | **8.0 bits** | **15.3 bits** |
+| evaluation keys | 55.9 GB | 55.9 GB |
+| peak host memory | 93.6 GB | 94.7 GB |
+
+**Which case we are in.** The middle one: the refresh must bracket the scan. After
+a ~10–11 level scan, a block has ~12–13 levels (uniform) per refresh for everything
+else. N = 2^16 is ruled out: at the only scale with usable precision, it leaves ≤ 4
+levels.
+
+**What it changes about the plan.**
+* Depth is no longer the binding constraint; **precision and key memory are**.
+  The levels fit. 8 bits may not be enough, and 56 GB of keys is 2.3× the 24 GB
+  GPU target before the model's own rotation keys are counted.
+* With ~12 levels per refresh, the degree ≤ 4 cap on the non-exp operators is
+  stricter than it needs to be. A degree-15 Chebyshev fit costs 4 levels.
+* Precision is a fixed floor, not a drift: flat over 5 consecutive bootstraps and
+  across every level of the EPOCH. Refresh count is not a precision risk.
+
+**What is still unknown.** Whether the model tolerates 8 bits (a plaintext
+noise-injection test answers it). Whether iterative bootstrapping lifts uniform to
+~16 bits at 2^17 for one level. How far a larger level budget cuts key memory.
+Whether a sparse secret is 128-bit secure at these parameters (OpenFHE checks it
+against the uniform-ternary table). Nothing about GPU latency: every timing here is
+CPU-only.
+
+**Found on the way.** OpenFHE returned garbage (−2.4 bits) *without raising* at
+scale 50 / uniform / firstMod 60. Toy-N precision was optimistic by 7 bits. Both are
+reasons every number here is checked against the input rather than inferred from a
+call succeeding.
