@@ -622,7 +622,8 @@ int main(int argc, char** argv) {
         row.str("status", "ok");
         row.write(c.out);
         std::cout << row.dump();
-        cc->ClearStaticMapsAndVectors();
+        // No ClearStaticMapsAndVectors(): it does not exist in OpenFHE 1.2.1 (the
+        // tjws-03 install), and this process exits on the next line anyway.
         return 0;
     }
     catch (const std::exception& e) {
