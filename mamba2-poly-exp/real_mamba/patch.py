@@ -70,7 +70,7 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
                              softplus_gate=None, silu_conv_gate=None,
                              silu_norm_gate=None, fused_dt_gate=None,
                              gate_collector=None, gated_norm_override=None,
-                             **unused):
+                             refresh=None, **unused):
     """One Mamba-2 mixer, in plain PyTorch, with a swappable z -> a map.
 
     Mirrors the `use_mem_eff_path=False` branch of
@@ -89,6 +89,11 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
                          `softplus_gate` and `transition` when given.
     `gate_collector`, if given, receives (layer_idx, name, tensor) for each gate
     INPUT, so the real ranges can be measured before anything is fitted.
+
+    `refresh`, if given, is called as refresh(layer_idx, name, tensor) -> tensor
+    on the scan's inputs ("scan_in_x", "scan_in_B", "scan_in_C", "scan_in_dt") and
+    output ("scan_out_y"). It marks where a CKKS bootstrap would bracket the scan,
+    so allpoly/ can inject bootstrap-sized noise exactly there. None = untouched.
     """
     batch, seqlen, _ = u.shape
 
@@ -145,6 +150,12 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
         dt = dt.clamp(min=dt_limit[0], max=dt_limit[1])             # ALLOW-CLAMP: fidelity to upstream, not a stability crutch
 
     # --- 6. the scan, with the swappable transition --------------------------
+    if refresh is not None:
+        li = getattr(mixer, "layer_idx", -1)
+        x = refresh(li, "scan_in_x", x.float())
+        Bm = refresh(li, "scan_in_B", Bm.float())
+        Cm = refresh(li, "scan_in_C", Cm.float())
+        dt = refresh(li, "scan_in_dt", dt)
     D = mixer.D.float()
     if getattr(mixer, "D_has_hdim", False):
         D = rearrange(D, "(h p) -> h p", p=mixer.headdim)
@@ -163,7 +174,10 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
     if collector is not None:
         collector(getattr(mixer, "layer_idx", -1), z_vals, a_vals)
 
-    y = rearrange(y, "b l h p -> b l (h p)").to(u.dtype)
+    y = rearrange(y, "b l h p -> b l (h p)")
+    if refresh is not None:
+        y = refresh(getattr(mixer, "layer_idx", -1), "scan_out_y", y)
+    y = y.to(u.dtype)
 
     # --- 7. gated RMSNorm, then out_proj            (mamba2.py:258-267) ------
     if gate_collector is not None:

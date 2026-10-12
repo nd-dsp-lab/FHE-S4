@@ -844,3 +844,52 @@ any of these deltas should not be quoted as reproducible.
 different structural form, recovers the gap. Nothing here says the SiLU sites
 are unreplaceable — only that the current fits are not free, and were never
 measured against the right baseline.
+
+---
+
+## Milestone: Path A stage A1 — measured, and recorded late (2026-10-11)
+
+These runs happened on 2026-09-22 (CRC jobs 1464644, 1464753) and were reported in
+conversation but never written here, which is why a later review concluded Path A
+"was never run". It was.
+
+**Implemented / run.** Path A stage A1: the 24 `norm_pre` RMSNorms replaced by a
+learned per-layer constant divisor (zero levels), initialised from Phase 1's
+per-layer median sqrt(v) (`c init range [0.3069, 47.9]`), trained by distillation
+with only the 24 constants and their gammas trainable (18,456 of 128,989,656).
+
+| tokens | steps | Δppl @512 | Δppl @2048 |
+|---|---|---|---|
+| before training | — | +216.81 | +184.60 |
+| 100k | 12 | +153.70 | +121.62 |
+| 1M | 122 | **+39.07** | **+31.50** |
+
+**Learned.** It converges, at Δppl ∝ budget^−0.59. Extrapolated: ~+15 at 5M tokens,
+~+5 at ~32M, the paired noise floor only at ~73B — pretraining scale. This is THE-X's
+LayerNorm method (Chen et al. 2022: `ŷ = x ∘ γ + β`, LN-Distill with everything else
+frozen), which THE-X validated on a 2-layer BERT-tiny and itself warns accumulates
+error with depth. Rounding the constants to 20 bits costs 0.0000.
+
+**Still uncertain.** Whether whole-model fine-tuning (which THE-X permits and we
+deliberately did not do) closes the gap. Two runs were void before these:
+1464468 trained all 129M parameters by mistake (fixed in a3157e2), and an earlier one
+crashed because fused add-norm bypassed the replaced module (fixed in 49f441c).
+
+---
+
+## Milestone: allpoly — the all-polynomial plaintext emulator (2026-10-11)
+
+**Implemented.** `allpoly/`: the model forward written out explicitly, every
+non-polynomial operator swappable for the polynomial an FHE circuit would run
+(Chebyshev basis, per-channel/head/layer fits to calibrated ranges), CKKS bootstrap
+noise at the refresh points, and OpenFHE's own degree→depth table. Reports paired
+Δppl, out-of-interval fractions, and decay-factor safety (`a_max`, `a<0`) per config.
+
+**Learned so far.** (1) Exact mode reproduces `model(ids).logits` to 8.6e-6. (2) Our
+old "degree 4 = depth 2" counted only ciphertext×ciphertext multiplies; per OpenFHE a
+degree 3–5 polynomial costs 4 levels. (3) `1/√v` by Chebyshev guess + Newton converges
+over any range, at a cost set by the range ratio: 5–7 levels for 10–100×, ~25–30 for
+1e5, ~45 for 1e7.
+
+**Still uncertain.** Everything that needs a GPU: per-operator cost above degree 4,
+and whether the model tolerates bootstrap noise. That is Step 9, Phase A.
