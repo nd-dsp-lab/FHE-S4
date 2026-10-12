@@ -47,7 +47,9 @@ decay numbers near the baselines below — that is the known answer (checked:
 −0.0048 ± 0.0076). If it does not, stop: your setup differs and nothing after it
 can be trusted.
 
-Smoke test on a laptop (a minute or two, tiny data): `python -m allpoly.eval_allpoly --device cpu --smoke`
+Smoke test on a laptop (about a minute, tiny data): `python -m allpoly.eval_allpoly --device cpu --smoke`.
+It only checks that the pipeline runs: it passes if it ends with `SMOKE TEST PASSED`.
+Its verdicts mean nothing — 256 calibration tokens leave inputs outside the fitted ranges.
 
 ## Reading a result line
 

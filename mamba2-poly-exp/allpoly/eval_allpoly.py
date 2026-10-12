@@ -114,6 +114,13 @@ def main() -> int:
         args.chunk_size = 32
         args.max_blocks_per_shard = 3
 
+    if args.smoke:
+        print("=" * 88)
+        print("SMOKE TEST: calibration on 256 tokens, 6 evaluation blocks. This only checks that")
+        print("the pipeline RUNS. With so little calibration data, inputs fall outside the fitted")
+        print("ranges, so verdicts and warnings below are expected to look bad and MEAN NOTHING.")
+        print("It passes if it reaches 'wrote ...' with no traceback.")
+        print("=" * 88)
     torch.manual_seed(0)
     dev = args.device
     model, cfg, backend = load_model(backend=args.backend, device=dev, dtype=torch.float32)
@@ -212,7 +219,9 @@ def main() -> int:
             # alone has frac(a>1) = 1.1e-7, a_max 1.049; with 11.35-bit noise 5.5e-3,
             # a_max 1.013. Flag what is clearly worse than the noisy baseline.
             flag = ("  <-- a > 1 FAR above baseline: recurrence can expand"
-                    if (dr["frac_a_gt_1"] > 1e-2 or dr["a_max"] > 1.1) else "")
+                    if (dr["frac_a_gt_1"] > 1e-2 or dr["a_max"] > 1.1) and not args.smoke else "")
+            if args.smoke:
+                verdict = "(smoke: ignore)"
             print(f"  {name:22s} d ppl {mean:+10.4f} +/- {2 * sem:8.4f}  {verdict:20s} "
                   f"frac_out {fo:.1e}  a>1 {dr['frac_a_gt_1']:.1e} (max {dr['a_max']:.3f})  "
                   f"a<0 {dr['frac_a_lt_0']:.1e}  ({r['seconds']:.0f}s){flag}", flush=True)
@@ -221,7 +230,7 @@ def main() -> int:
             args.out.write_text(json.dumps(out, indent=1, default=float) + "\n")
     out["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     args.out.write_text(json.dumps(out, indent=1, default=float) + "\n")
-    print(f"\nwrote {args.out}")
+    print(f"\nwrote {args.out}" + ("   <- SMOKE TEST PASSED (pipeline runs)" if args.smoke else ""))
     return 0
 
 
