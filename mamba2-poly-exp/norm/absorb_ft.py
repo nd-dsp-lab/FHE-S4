@@ -206,7 +206,11 @@ def main(argv=None) -> int:
     ap.add_argument("--lambda-kd", type=float, default=1.0)
     ap.add_argument("--temperature", type=float, default=2.0)
     ap.add_argument("--lambda-vspread", type=float, default=0.0,
-                    help="weight on mean_layers Var_tokens(log v) at the pre-norm inputs")
+                    help="weight on mean_layers Var_tokens(log v) at the pre-norm inputs. SCALE: "
+                         "the KD term is SUMMED over the ~511 positions of a sequence (batchmean "
+                         "over a batch of one, inherited from distill_norm.py) while Var(log v) is "
+                         "O(0.1-0.5), so lambda 0.1 is ~1e-4 of the loss -- round 1 (job 1539519) "
+                         "ran 0.1 and it changed nothing. Meaningful values are O(100-1000).")
     ap.add_argument("--warmup-frac", type=float, default=0.05)
     ap.add_argument("--grad-clip", type=float, default=1.0)
     ap.add_argument("--calib-blocks", type=int, default=16)

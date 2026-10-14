@@ -893,3 +893,40 @@ over any range, at a cost set by the range ratio: 5–7 levels for 10–100×, ~
 
 **Still uncertain.** Everything that needs a GPU: per-operator cost above degree 4,
 and whether the model tolerates bootstrap noise. That is Step 9, Phase A.
+
+---
+
+## Milestone: RMSNorm absorption + whole-model fine-tuning, round 1 (2026-10-13)
+
+**Run.** Job 1539519, `cluster/job_absorb_ft.sh`: the 24 residual pre-norms replaced
+by per-layer constants folded into `in_proj` (zero levels), the WHOLE model then
+fine-tuned (A_log, dt_bias, embedding frozen), 1M tokens of wikitext-103, against a
+control trained with the identical recipe and no replacement. Paired per block, 40
+blocks, wikitext-2 validation.
+
+| lr (backbone) | λ_vspread | absorbed vs CONTROL @512 | @2048 | std(log v), median layer |
+|---|---|---|---|---|
+| 2e-5 | 0 | +4.81 ± 0.52 | +5.01 ± 0.46 | 0.553 → 0.385 |
+| 1e-4 | 0 | **+1.57 ± 0.20** | **+1.61 ± 0.14** | 0.553 → 0.302 |
+| *Path A (constants only), same 1M tokens* | — | *+39.07* | *+31.50* | — |
+
+Controls alone: −0.15 / −0.08 (lr 2e-5), −0.18 / −0.08 (lr 1e-4) vs the untouched
+model — fine-tuning on wikitext helps by itself, which is why the verdict is against
+the control. Fold check on every absorbed run: 24 constants folded into `in_proj`,
+logits unchanged to ~3e-6 relative.
+
+**Learned.** (1) Unfreezing the backbone is the missing piece of THE-X's recipe for a
+24-layer model: 25x better than constants-only at the same budget. (2) Learning rate
+matters a lot (5x lr -> 3x lower cost), and the run had not converged (KD still
+falling at the last step). (3) The model narrows v's spread ON ITS OWN when the norm
+is gone — 0.553 → 0.302 in std(log v) — i.e. it learns to self-normalise. (4) No length
+drift: 512 and 2048 agree.
+
+**A defect in the experiment, not a result.** The λ_vspread = 0.1 runs are identical
+to λ = 0 to four decimals. The penalty WAS computed (Var(log v) 0.52 → 0.15), but the
+KD term is summed over the ~511 positions of each sequence while the penalty is
+O(0.1), so 0.1 × 0.15 was ~1e-4 of the loss. The penalty is therefore UNTESTED, not
+"no effect". Meaningful weights are O(100–1000).
+
+**Still uncertain.** Whether more tokens, a higher lr, or a properly weighted penalty
+close the remaining +1.6. The gated norm has not been touched.
