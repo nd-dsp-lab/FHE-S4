@@ -42,8 +42,8 @@ SILU_D=27 SP_Q=13 bash allpoly/run_phase_a.sh combined       # your chosen degre
 Knobs: `DEV=cuda`, `SHARDS=8`, `LENGTHS="512 2048"`, `PY=python`. If L=2048 runs
 out of memory on your card, use `LENGTHS=512` and say so in your write-up.
 
-Step 0 runs the exp gate alone. **It must come out "not distinguishable"**, with
-decay numbers near the baselines below — that is the known answer (checked:
+Step 0 runs the exp gate alone. **It must come out "not distinguishable"**, with a
+decay-above-1 FRACTION near the baselines below (the max will be larger) — that is the known answer (checked:
 −0.0048 ± 0.0076). If it does not, stop: your setup differs and nothing after it
 can be trusted.
 
@@ -64,12 +64,19 @@ only:silu_conv   d ppl  +0.1234 +/- 0.0456  SIGNIFICANT   frac_out 0.0e+00  a>1 
 | `a>1 (max)` | fraction of decay factors above 1, and the largest | above 1 the recurrence **expands**. Compare to the baselines below |
 | `a<0` | fraction of negative decays | ~0.8% for the exp gate; report it, don't hide it |
 
-**Decay-factor baselines** (measured with this code: 32×2048 calibration, L = 2048):
+**Decay-factor baselines.** Judge by the **fraction** of decays above 1, not the
+maximum. The maximum is set by a single rare token whose input falls outside the
+fitted interval, so it grows with how much text you evaluate:
 
-| config | frac(a > 1) | max a | frac(a < 0) |
-|---|---|---|---|
-| exp gate alone | 1.1e-7 | 1.049 | 8.2e-3 |
-| exp gate + 11.35-bit noise | 5.5e-3 | 1.013 | 8.2e-3 |
+| exp gate alone, L = 2048 | calibration | decays evaluated | frac(a > 1) | max a |
+|---|---|---|---|---|
+| small check | 32 × 2048 | ~9M | 1.1e-7 | 1.049 |
+| 8× more text | 32 × 2048 | ~75M | 6.6e-8 | **17.3** |
+| default calibration | **64** × 2048 (default) | ~75M | **1.3e-8** | 4.18 |
+| + 11.35-bit noise | 32 × 2048 | ~9M | 5.5e-3 | 1.013 |
+
+So a max of 4–20 on a full run is normal. More calibration data shrinks the fraction
+(64 blocks: 5× lower than 32). frac(a < 0) is ~8e-3 in every row.
 
 Bootstrap noise pushes ~0.5% of decays slightly above 1. Perplexity does not notice at
 L = 2048 — whether it matters at longer lengths is open. Any operator that raises

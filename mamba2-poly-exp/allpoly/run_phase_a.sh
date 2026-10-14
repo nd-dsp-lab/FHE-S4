@@ -3,6 +3,7 @@
 #
 #   bash allpoly/run_phase_a.sh                          # steps 0-2: per-operator degree sweep
 #   SILU_D=27 SP_Q=13 bash allpoly/run_phase_a.sh combined   # step 3, with the degrees you picked
+#   SILU_CONV_D=7 SILU_NORM_D=13 SP_Q=13 bash allpoly/run_phase_a.sh combined   # sites may differ
 #
 # Environment knobs (defaults in brackets):
 #   PY [python]  DEV [cuda]  SHARDS [8]  LENGTHS ["512 2048"]
@@ -21,13 +22,16 @@ run() { echo; echo "######## $*"; $PY -m allpoly.eval_allpoly --device "$DEV" --
           --lengths $LENGTHS --calib-cache "$CAL" "$@"; }
 
 if [ "${1:-sweep}" = "combined" ]; then
-  : "${SILU_D:?set SILU_D to the SiLU degree you picked}" "${SP_Q:?set SP_Q to the softplus Q degree you picked}"
+  : "${SP_Q:?set SP_Q to the softplus Q degree you picked}"
+  SILU_CONV_D=${SILU_CONV_D:-${SILU_D:?set SILU_D, or SILU_CONV_D and SILU_NORM_D}}
+  SILU_NORM_D=${SILU_NORM_D:-${SILU_D:?set SILU_D, or SILU_CONV_D and SILU_NORM_D}}
   # step 3: the chosen degrees together, then with bootstrap noise
   #   11.35 bits = mean-abs precision after one bootstrap, uniform secret, N=2^17 (fhe/EPOCH.md)
   #   18.23 bits = same, sparse secret
-  run --degree-silu "$SILU_D" --degree-softplus-q "$SP_Q" --noise-bits 11.35 18.23 \
+  run --degree-silu-conv "$SILU_CONV_D" --degree-silu-norm "$SILU_NORM_D" --degree-softplus-q "$SP_Q" \
+      --noise-bits 11.35 18.23 \
       --configs gates exp+noise@11.35 gates+noise@11.35 exp+noise@18.23 gates+noise@18.23 \
-      --out "$OUT/A3_gates_silu${SILU_D}_q${SP_Q}.json"
+      --out "$OUT/A3_gates_conv${SILU_CONV_D}_norm${SILU_NORM_D}_q${SP_Q}.json"
   exit 0
 fi
 

@@ -149,7 +149,8 @@ class PolyOps(ExactOps):
     of each is attributable. Exact ones fall through to ExactOps.
     """
 
-    def __init__(self, calib: ExactOps, which, *, degree_silu=27, degree_softplus_q=13,
+    def __init__(self, calib: ExactOps, which, *, degree_silu=27, degree_silu_conv=None,
+                 degree_silu_norm=None, degree_softplus_q=13,
                  degree_exp=4, degree_invsqrt=27, newton=None, invsqrt_target=2.0 ** -12,
                  margin=0.05, v_margin=2.0, exp_margin=0.25):
         super().__init__(record=False)
@@ -157,7 +158,12 @@ class PolyOps(ExactOps):
         bad = self.which - set(OPS)
         if bad:
             raise ValueError(f"unknown operators {bad}; choose from {OPS}")
-        self.cfg = dict(degree_silu=degree_silu, degree_softplus_q=degree_softplus_q,
+        # the two SiLU sites are separate operators with separate fits: their
+        # degrees need not match (each defaults to degree_silu)
+        degree_silu_conv = degree_silu if degree_silu_conv is None else degree_silu_conv
+        degree_silu_norm = degree_silu if degree_silu_norm is None else degree_silu_norm
+        self.cfg = dict(degree_silu_conv=degree_silu_conv, degree_silu_norm=degree_silu_norm,
+                        degree_softplus_q=degree_softplus_q,
                         degree_exp=degree_exp, degree_invsqrt=degree_invsqrt, newton=newton,
                         invsqrt_target=invsqrt_target,
                         margin=margin, v_margin=v_margin, exp_margin=exp_margin)
@@ -173,13 +179,13 @@ class PolyOps(ExactOps):
         if "silu_conv" in self.which:
             for l in layers:
                 lo, hi = widen(st["silu_conv_in"][l]["min"], st["silu_conv_in"][l]["max"])
-                c = fit_cheb_interp(lambda x: x / (1.0 + np.exp(-x)), lo, hi, degree_silu)
-                self.mods[("silu_conv", l)] = ChebPerChannel(c, lo, hi, degree_silu, f"silu_conv:{l}")
+                c = fit_cheb_interp(lambda x: x / (1.0 + np.exp(-x)), lo, hi, degree_silu_conv)
+                self.mods[("silu_conv", l)] = ChebPerChannel(c, lo, hi, degree_silu_conv, f"silu_conv:{l}")
         if "silu_norm" in self.which:
             for l in layers:
                 lo, hi = widen(st["silu_norm_in"][l]["min"], st["silu_norm_in"][l]["max"])
-                c = fit_cheb_interp(lambda x: x / (1.0 + np.exp(-x)), lo, hi, degree_silu)
-                self.mods[("silu_norm", l)] = ChebPerChannel(c, lo, hi, degree_silu, f"silu_norm:{l}")
+                c = fit_cheb_interp(lambda x: x / (1.0 + np.exp(-x)), lo, hi, degree_silu_norm)
+                self.mods[("silu_norm", l)] = ChebPerChannel(c, lo, hi, degree_silu_norm, f"silu_norm:{l}")
         if "softplus" in self.which:
             # Delta = Q(x)^2 with Q ~ sqrt(softplus): non-negative by construction
             for l in layers:

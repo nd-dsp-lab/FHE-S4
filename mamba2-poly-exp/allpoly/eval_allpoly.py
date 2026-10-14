@@ -88,6 +88,10 @@ def main() -> int:
     ap.add_argument("--lengths", type=int, nargs="+", default=[512, 2048])
     ap.add_argument("--chunk-size", type=int, default=256)
     ap.add_argument("--degree-silu", type=int, default=27)
+    ap.add_argument("--degree-silu-conv", type=int, default=None,
+                    help="SiLU after conv1d; defaults to --degree-silu. The two sites need not match")
+    ap.add_argument("--degree-silu-norm", type=int, default=None,
+                    help="SiLU inside the gated norm; defaults to --degree-silu")
     ap.add_argument("--degree-softplus-q", type=int, default=13)
     ap.add_argument("--degree-invsqrt", type=int, default=27)
     ap.add_argument("--invsqrt-target", type=float, default=2.0 ** -12)
@@ -149,7 +153,8 @@ def main() -> int:
     print(json.dumps(out["calibration"]["v_range_by_position"], indent=1))
 
     # 2. configs ----------------------------------------------------------
-    pk = dict(degree_silu=args.degree_silu, degree_softplus_q=args.degree_softplus_q,
+    pk = dict(degree_silu=args.degree_silu, degree_silu_conv=args.degree_silu_conv,
+              degree_silu_norm=args.degree_silu_norm, degree_softplus_q=args.degree_softplus_q,
               degree_invsqrt=args.degree_invsqrt, invsqrt_target=args.invsqrt_target,
               margin=args.margin, v_margin=args.v_margin)
     configs = []
@@ -215,11 +220,13 @@ def main() -> int:
             res["configs"][name] = r
             fo = max((v.get("frac_out_max", 0.0) for v in r.get("operators", {}).values()), default=0.0)
             dr = r["decay"]
-            # Baselines measured 2026-10-11 (32x2048 calibration, L=2048): the exp gate
-            # alone has frac(a>1) = 1.1e-7, a_max 1.049; with 11.35-bit noise 5.5e-3,
-            # a_max 1.013. Flag what is clearly worse than the noisy baseline.
-            flag = ("  <-- a > 1 FAR above baseline: recurrence can expand"
-                    if (dr["frac_a_gt_1"] > 1e-2 or dr["a_max"] > 1.1) and not args.smoke else "")
+            # Flag on the FRACTION only. a_max is a maximum over ~1e7-1e8 decays and is
+            # set by one rare token outside the fitted interval, so it grows with how
+            # much text is evaluated: same calibration, 8x more text took it from 1.05
+            # to 17.3 while frac(a>1) stayed ~1e-7 (2026-10-14). The exp gate alone sits
+            # at 1e-8..1e-7; with 11.35-bit noise ~5.5e-3.
+            flag = ("  <-- frac(a>1) far above baseline: recurrence can expand"
+                    if dr["frac_a_gt_1"] > 1e-2 and not args.smoke else "")
             if args.smoke:
                 verdict = "(smoke: ignore)"
             print(f"  {name:22s} d ppl {mean:+10.4f} +/- {2 * sem:8.4f}  {verdict:20s} "
