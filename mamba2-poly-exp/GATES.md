@@ -15,6 +15,13 @@ easy one.**
 Measured on `state-spaces/mamba2-130m`, wikitext-2, degree 4, per-channel
 intervals, no training. Baseline (everything exact) 18.1368.
 
+> **Update 2026-10-28 (§9):** segmented lookup tables (ROSETTA-style, evaluated in
+> TFHE rather than as CKKS polynomials) replace every gate in this table at once
+> for **+0.017 / +0.016** paired perplexity (L = 512 / 2048), and the RMSNorm
+> 1/√· table has been run encrypted in OpenFHE at 128-bit security: 15.2 bits
+> relative with two Newton steps. The polynomial rows above are kept as the record
+> of what failed and why.
+
 ---
 
 ## 1. Depth is a per-layer budget, and it is the thing to minimise
@@ -225,3 +232,126 @@ satisfy that a polynomial does not".
    recovers essentially nothing because there was no gap; here there are real
    gaps of +0.3 to +4, so fine-tuning has something to actually recover. This is
    the most likely route to making SiLU viable.
+
+---
+
+## 9. Segmented lookup tables: the gates the polynomials could not do (2026-10-27/28)
+
+Prompted by ROSETTA (Yu et al., CCS '26, arXiv 2609.16915): hybrid CKKS/TFHE, where
+a non-polynomial function is a TFHE lookup of `N_seg` segments x 2048 entries with
+linear interpolation, and CKKS keeps the linear algebra. Two questions: does a
+table of that shape preserve the model in plaintext, and what precision does it
+actually get encrypted?
+
+Code is on the `seglut-sim` branch (CRC: `/groups/tjung/jzhao7/FHEMAMBA-seglut`):
+`real_mamba/seglut.py` (the table, plus RMSNorm / gated-norm modules whose
+1/√v is a table), `eval/seglut_paired.py` (same shards and verdict rule as the
+paired test above: 16 shards, significant if |mean| > 2·SEM),
+`cluster/job_seglut*.sh`, results in `eval/seglut/*.json`. The encrypted
+benchmark is `fhe/seglut_invsqrt/` (built and run on tjws-03).
+
+### 9a. Plaintext tables: what matters is the edge of the table, not its precision
+
+4 segments, 2048 entries each, linear interpolation. Boundaries are geometric for
+1/√v (its input spans 6e6) and uniform otherwise; per-channel domains for SiLU /
+softplus / fused dt come from `runs/gate_stats/gate_stats.json` (the same file the
+polynomials were fitted on), widened 5%. Table precision alone is 17-28 bits for
+every table, so any loss below comes from somewhere else.
+
+Paired Δppl, L = 512 / 2048 (exact 27.82 / 21.54; n.s. = not significant):
+
+| gate | clamp | **extend** (1/√v ranges calibrated on *train*) | wrap | clamp + 12-bit abs noise | extend + 12-bit abs noise |
+|---|---|---|---|---|---|
+| 1/√v, all 49 norms | −0.0000 n.s. / +0.0002 n.s. | +0.0001 n.s. / +0.0001 n.s. | +inf / +inf | +0.049 / +0.042 | +0.049 / +0.042 |
+| fused `exp(A·softplus)` | +0.0003 n.s. / +0.0002 n.s. | +0.0001 n.s. / +0.0001 | +0.63 / +2.18 | +0.0002 n.s. / +0.0004 n.s. | −0.0000 n.s. / +0.0003 n.s. |
+| softplus alone | −0.0004 n.s. / +0.0008 n.s. | **+inf / +inf** | +inf / +inf | +0.065 / +0.043 | +inf / +inf |
+| SiLU after conv | +0.35 / +0.28 | **+0.011 / +0.012** | +22.8 / +17.0 | +0.35 / +0.28 | +0.011 / +0.012 |
+| SiLU in gated norm | +0.14 / +0.10 | **+0.005 / +0.003** | +21.6 / +15.4 | +0.14 / +0.10 | +0.005 / +0.003 |
+| **all of the above** | +0.58 / +0.45 | **+0.017 / +0.016** | +inf / +inf | +0.63 / +0.49 | +0.067 / +0.058 |
+
+What the columns do with inputs outside the table (0.01-0.1% of them):
+**clamp** holds the edge value, **extend** continues the end segments' lines,
+**wrap** is what a negacyclic blind rotation literally computes (the sign flips).
+
+1. **wrap kills everything.** A fraction of a percent of off-table inputs is enough.
+   The encrypted protocol must clamp the table index.
+2. **SiLU's whole loss under clamp was the clamp.** SiLU(x) ≈ x for large x, so
+   holding the edge value throws away signal. Linear tails cut it 25-50x.
+3. **The decay must come from the fused table, never softplus followed by exp.**
+   Softplus alone diverges under extend (the lower tail goes negative, Δ < 0,
+   a > 1) and under output-scaled noise; inside `all` the fused table supplies the
+   decay (bounded in [0, 1]) and softplus only weights the input, so it is harmless.
+   So: **fused dt + softplus clamped, SiLU extended, 1/√v either.**
+4. Noise at 12 bits absolute costs +0.05 through the norms (`norm_f` is most of it).
+
+Remaining gap: the SiLU / softplus / dt domains are still from validation
+statistics; only the 1/√v ranges have been moved to train.
+
+### 9b. Encrypted 1/√v in OpenFHE 1.2.1, 128-bit
+
+`fhe/seglut_invsqrt/bench.cpp`, stock OpenFHE (nothing modified or installed),
+CKKS ring 2^17 / depth 27, FHEW STD128 (n = 1305, N = 2048, q = 4096). 128
+values sampled across the 4 segments of [0.0013, 16638]:
+
+1. **segment index**: 3 comparisons, each CKKS→FHEW of (v − τ_k), large-precision
+   `EvalSign`, FHEW→CKKS. One sign cannot resolve a 6e6 range, so each comparison
+   has its own scale and is trusted only up to 1.2·τ_{k+1}; the masks are built so
+   an untrusted comparison is always multiplied by a trusted 0.
+2. **tables**, construct-then-select: per segment, an affine map to table
+   positions, CKKS→FHEW, a manual modulus switch to q, and `EvalFunc` with a
+   hand-built **negacyclic 2048-entry table** (one bootstrap). OpenFHE's own
+   `GenerateLUTviaFunction` allows only q/256 = 8 entries.
+3. **exact interpolation**: the index the bootstrap reads is ~9 positions from the
+   true one, but that offset is a public-coefficient linear function of the key,
+   so it is returned to CKKS exactly (to 0.003 positions) and the interpolation
+   uses the index that was actually read.
+4. **select** with mask products, after sharpening each comparison bit with
+   x²(3 − 2x). Without it, a 2.5e-4 bit error times segment 0's outputs (up to
+   ~45) leaked into segment 3's outputs (~0.008): up to 70% error.
+5. **Newton** on the selected output, y ← y(3 − v·y²)/2, CKKS only, 4 levels.
+
+| | rel. bits | worst segment | max rel. error | ROSETTA bits (−log2 RMSE) |
+|---|---|---|---|---|
+| table + interpolation | 5.5 | 5.3 | 9.5% | 3.8 |
+| + 1 Newton step | 9.2 | 8.7 | 1.3% | 7.3 |
+| + 2 Newton steps | **15.2** | 14.4 | 0.03% | 13.5 |
+
+(TOY parameters, n = 32: 8.4 → 15.4 → 22.6.) Comparisons: 0 wrong out of 289.
+
+**Why the table alone stops near 5 bits.** Every FHEW result is modulus-switched
+back to q = 4096, which adds noise of √(n/18) ≈ 8.5 units (measured 7.5-9.7 in
+every segment; 1.3 at TOY's n = 32, matching the same formula). FHEW→CKKS decodes
+through a sine, so outputs must stay within ±0.2q ≈ ±820 units: ~7 bits of each
+table's output range, minus ~2 more because 1/√v varies 7.7x inside a 60x-wide
+segment. ROSETTA avoids the final modulus switch by packing the blind-rotation
+output straight into CKKS, which OpenFHE does not expose.
+
+**Why Newton is now alive.** §6 deferred RMSNorm and Newton (Path B) died because
+no starting guess holds over v's 6e6 range. The table is that guess: ~5 bits
+relative everywhere, from which each step roughly squares the error.
+
+**How many bits are enough.** `--noise-scale rel` (new; error proportional to the
+output, which is the shape the benchmark measured) on all 49 norms, small-scale
+(8 shards x 2 blocks, L = 512, CPU): 5.2 bits **+0.25** (significant), 8.1 bits
++0.004 n.s., 12 bits +0.001 n.s. One Newton step is about at the threshold; two
+clear it. (The older `range` mode is no proxy: it applies the largest output's
+noise to every element and diverges at 8 bits.)
+
+**Cost**, single core per value: 3 `EvalSign` at 3.4 s + 8 `EvalFunc` at 0.38 s
+= 13.1 s of FHEW work, 77% of it the comparisons. Wall clock on 20 threads,
+128 values: 753 s, of which FHEW→CKKS (15 batched calls) is 510 s. Key generation
+48 s, peak memory 24 GB. Per token, the 49 norms are ~640 core-seconds of FHEW
+work before conversions.
+
+### 9c. Next
+
+1. **Cheaper segment selection.** Three large-precision signs are 77% of the FHEW
+   cost; fewer, smaller-range comparisons (or more segments with small-precision
+   signs) are the obvious lever.
+2. **Batch the FHEW→CKKS conversions** (15 calls of 128 values now) and measure
+   how the cost scales with values per call.
+3. Move SiLU / softplus / dt domains to train-split statistics, then run the whole
+   `all` configuration encrypted — SiLU is 98.5% of the lookups per token
+   (43,008 + 36,864 of ~81,000), so its cost decides whether this is practical.
+4. Depth: the table + 2 Newton steps use 24 of 27 levels, so in a full block this sits
+   right after a CKKS bootstrap.

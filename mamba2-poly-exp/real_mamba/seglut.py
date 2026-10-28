@@ -173,8 +173,8 @@ class SegLUT(nn.Module):
             raise ValueError(f"fn must be one of {FUNCTIONS}")
         if oob not in OOB_MODES:
             raise ValueError(f"oob must be one of {OOB_MODES}")
-        if noise_scale not in ("abs", "range"):
-            raise ValueError("noise_scale must be 'abs' or 'range'")
+        if noise_scale not in ("abs", "range", "rel"):
+            raise ValueError("noise_scale must be 'abs', 'range' or 'rel'")
         tau = torch.as_tensor(np.asarray(tau, dtype=np.float64), dtype=torch.float32)
         if tau.ndim != 2 or tau.shape[1] < 2:
             raise ValueError("tau must be (C, n_seg + 1)")
@@ -269,7 +269,11 @@ class SegLUT(nn.Module):
 
         if self.noise_bits:
             eps = self._noise(out, self.noise_bits)
-            out = out + (eps * self.out_scale if self.noise_scale == "range" else eps)
+            # rel: error proportional to the output, which is what the OpenFHE
+            # benchmark (fhe/seglut_invsqrt) measured for 1/sqrt -- each segment's
+            # table noise is a fixed fraction of that segment's own output range
+            scale = {"range": self.out_scale, "rel": out.abs()}.get(self.noise_scale)
+            out = out + (eps if scale is None else eps * scale)
         if self.track:
             self.n_neg += int((out < 0).sum())
             self.n_gt1 += int((out > 1).sum())

@@ -118,7 +118,7 @@ def main(argv=None) -> int:
     ap.add_argument("--margin", type=float, default=0.05)
     ap.add_argument("--oob", default="clamp", choices=OOB_MODES)
     ap.add_argument("--noise-bits", type=float, default=None)
-    ap.add_argument("--noise-scale", default="abs", choices=("abs", "range"))
+    ap.add_argument("--noise-scale", default="abs", choices=("abs", "range", "rel"))
     ap.add_argument("--cmp-noise-bits", type=float, default=None)
     # data
     ap.add_argument("--gate-stats", type=Path, default=Path("runs/gate_stats/gate_stats.json"))
