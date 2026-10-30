@@ -376,6 +376,8 @@ def main(argv=None) -> int:
                                  # openfhe 1/sqrt only: reads past the table, reflected (garbage)
                                  "frac_wrapped": frac(sum(getattr(t, "n_wrap", 0) for t in ts), seen),
                                  "frac_wrapped_low": frac(sum(getattr(t, "n_wrap_lo", 0) for t in ts), seen),
+                                 # inf/nan inputs: an earlier norm already diverged
+                                 "frac_nonfinite": frac(sum(getattr(t, "n_nonfinite", 0) for t in ts), seen),
                                  "n_seen": seen}
                 res[gname] = {
                     "per_shard_delta_ppl": dppl,

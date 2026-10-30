@@ -102,6 +102,7 @@ class SchemeSwitchInvSqrt(nn.Module):
 
     def reset_counters(self):
         self.n_seen = self.n_oob = self.n_neg = self.n_gt1 = self.n_wrap = self.n_wrap_lo = 0
+        self.n_nonfinite = 0
 
     def reseed(self, seed=None):
         self.seed = self.seed if seed is None else seed
@@ -131,6 +132,11 @@ class SchemeSwitchInvSqrt(nn.Module):
         dtype = v.dtype
         vd = v.double()
         tau = self.tau
+        # an earlier diverged norm overflows the fp16 residual to inf; the table read
+        # of inf/nan has no position, so those elements stay NaN instead of indexing
+        bad = ~torch.isfinite(vd)
+        if bad.any():
+            vd = torch.where(bad, tau[0], vd)
         seg = torch.zeros_like(vd, dtype=torch.long)
         for k in range(1, self.n_seg):
             seg = seg + (vd >= tau[k]).long()
@@ -145,8 +151,10 @@ class SchemeSwitchInvSqrt(nn.Module):
             y = y * (3.0 - vd * y * y) / 2.0
         if self.ckks_bits:
             y = y * (1.0 + self._randn(y, 2.0 ** -float(self.ckks_bits)))
+        y = torch.where(bad, float("nan"), y)
         if self.track:
             self.n_seen += vd.numel()
+            self.n_nonfinite += int(bad.sum())
             self.n_oob += int(((vd < tau[0]) | (vd > tau[-1])).sum())
             self.n_wrap += int(((p < 0) | (p >= self.half)).sum())
             self.n_wrap_lo += int((p < 0).sum())       # v below the table: small v

@@ -45,7 +45,9 @@ COMMON="--backend official --device cuda --shards 16 --lengths 512 2048 4096 819
 run() {
   local tag=$1; shift
   echo "=== prenorm_tfhe: $tag ($*) started $(date) ==="
-  python eval/seglut_paired.py $COMMON "$@" --out "eval/prenorm_tfhe/${tag}.json"
+  # job 1655430 lost all three runs to one crash in the first; keep going
+  python eval/seglut_paired.py $COMMON "$@" --out "eval/prenorm_tfhe/${tag}.json" \
+      || echo "=== prenorm_tfhe: $tag FAILED (exit $?) ==="
 }
 
 run cal1k_m05     --calib-seq-len 1024 --margin 0.05 --newton 2

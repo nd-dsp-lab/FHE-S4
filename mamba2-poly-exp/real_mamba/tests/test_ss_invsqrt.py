@@ -42,6 +42,17 @@ class TestAgainstBenchmark(unittest.TestCase):
         self.assertGreater(abs(float(rel2[0])), 1.0)
         self.assertLess(abs(float(rel2[1])), 1e-3)
 
+    def test_nonfinite_input_is_nan_not_a_crash(self):
+        # job 1655430: an fp16 residual overflowed to inf and the table read indexed
+        # out of bounds (a device-side assert on CUDA)
+        m = SchemeSwitchInvSqrt(TAU)
+        m.track = True
+        v = torch.tensor([float("inf"), float("nan"), 1.0], dtype=torch.float64)
+        y = m(v)
+        self.assertTrue(torch.isnan(y[:2]).all())
+        self.assertAlmostEqual(float(y[2]), 1.0, delta=1e-3)
+        self.assertEqual(m.n_nonfinite, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
