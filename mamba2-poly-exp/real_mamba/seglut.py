@@ -359,10 +359,20 @@ class _InvSqrtNormBase(nn.Module):
             return self.lut(v)
         return torch.rsqrt(v)
 
-    def build_lut(self, n_seg=4, n_br=2048, boundaries="log", margin=0.05, **kw):
+    def build_lut(self, n_seg=4, n_br=2048, boundaries="log", margin=0.05, impl="seglut",
+                  ss_kw=None, **kw):
+        """impl: 'seglut' = ROSETTA's table as published; 'openfhe' = the pipeline
+        fhe/seglut_invsqrt/bench.cpp runs (real_mamba/ss_invsqrt.py), Newton included."""
         if not torch.isfinite(self.v_min):
             raise RuntimeError("no calibration samples reached this norm -- the "
                                "module was never called (fused_add_norm still on?)")
+        if impl == "openfhe":
+            from real_mamba.ss_invsqrt import SchemeSwitchInvSqrt
+            tau = make_boundaries([float(self.v_min)], [float(self.v_max)], n_seg,
+                                  boundaries, margin=margin)[0]
+            self.lut = SchemeSwitchInvSqrt(tau, seed=kw.get("seed", 0), name=kw.get("name"),
+                                           **(ss_kw or {})).to(self.weight.device)
+            return self.lut
         self.lut = build_seglut("invsqrt", [float(self.v_min)], [float(self.v_max)],
                                 n_seg=n_seg, n_br=n_br, boundaries=boundaries,
                                 margin=margin, **kw).to(self.weight.device)

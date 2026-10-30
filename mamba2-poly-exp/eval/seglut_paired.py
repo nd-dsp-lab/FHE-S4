@@ -56,6 +56,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -120,6 +121,16 @@ def main(argv=None) -> int:
     ap.add_argument("--noise-bits", type=float, default=None)
     ap.add_argument("--noise-scale", default="abs", choices=("abs", "range", "rel"))
     ap.add_argument("--cmp-noise-bits", type=float, default=None)
+    # the 1/sqrt tables as OpenFHE builds them (real_mamba/ss_invsqrt.py)
+    ap.add_argument("--invsqrt-impl", default="seglut", choices=("seglut", "openfhe"),
+                    help="openfhe = the fhe/seglut_invsqrt pipeline: ~5.5-bit table + "
+                         "Newton; the noise/oob flags above then do not apply to 1/sqrt")
+    ap.add_argument("--newton", type=int, default=2)
+    ap.add_argument("--fhew-noise", type=float, default=9.7,
+                    help="index and phase noise in table positions; sqrt(n/18) = 8.5 at "
+                         "STD128, 9.7 the worst segment bench.cpp measured")
+    ap.add_argument("--ckks-bits", type=float, default=15.3)
+    ap.add_argument("--guard", type=float, default=0.05)
     # data
     ap.add_argument("--gate-stats", type=Path, default=Path("runs/gate_stats/gate_stats.json"))
     ap.add_argument("--calib-split", default="validation")
@@ -158,6 +169,8 @@ def main(argv=None) -> int:
     lut_kw = dict(n_br=args.n_br, margin=args.margin, oob=args.oob,
                   noise_bits=args.noise_bits, noise_scale=args.noise_scale,
                   cmp_noise_bits=args.cmp_noise_bits)
+    ss_kw = dict(newton=args.newton, index_noise=args.fhew_noise, phase_noise=args.fhew_noise,
+                 ckks_bits=args.ckks_bits, guard=args.guard)
 
     # ------------------------------------------------------------------ install
     ph = patch_transition(model, ExactExp(), chunk_size=args.chunk_size)
@@ -288,7 +301,8 @@ def main(argv=None) -> int:
             m.calibrating = False
             norm_ranges[site][str(layer)] = [float(m.v_min), float(m.v_max)]
             m.build_lut(n_seg=n_inv, boundaries=bkind("invsqrt"),
-                        seed=seed_for(site, layer), name=f"{site}_L{layer}", **lut_kw)
+                        seed=seed_for(site, layer), name=f"{site}_L{layer}",
+                        impl=args.invsqrt_impl, ss_kw=ss_kw, **lut_kw)
     ref_diff = float((exact_logits - ref_logits).abs().max())
     print(f"[seglut] exact-mode replacement vs untouched model, max |d logit| on one "
           f"256-token block: {ref_diff:.3e}")
@@ -307,6 +321,11 @@ def main(argv=None) -> int:
         p = precision[fam]
         print(f"[seglut] {fam:10s} {p['n_tables']:6d} tables  bits median {p['bits_median']:5.1f} "
               f"worst {p['bits_worst']:5.1f}   max abs err worst {p['max_abs_worst']:.2e}")
+        if fam.startswith("norm_") and args.invsqrt_impl == "openfhe":
+            rb = [float(t.precision()["rel_bits"][0]) for t in tables(fam)]
+            p["rel_bits_median"], p["rel_bits_worst"] = float(np.median(rb)), min(rb)
+            print(f"[seglut] {'':10s} relative bits median {p['rel_bits_median']:5.1f} "
+                  f"worst {p['rel_bits_worst']:5.1f}   max rel err worst {p['max_rel_worst']:.2e}")
     ops = next(iter(SC.values())).tfhe_ops_per_element
     print(f"[seglut] TFHE ops per element (n_seg={args.n_seg}, oob={args.oob}): {ops}")
 
@@ -354,6 +373,9 @@ def main(argv=None) -> int:
                     diag[fam] = {"frac_out_of_domain": frac(sum(t.n_oob for t in ts), seen),
                                  "frac_out_lt_0": frac(sum(t.n_neg for t in ts), seen),
                                  "frac_out_gt_1": frac(sum(t.n_gt1 for t in ts), seen),
+                                 # openfhe 1/sqrt only: reads past the table, reflected (garbage)
+                                 "frac_wrapped": frac(sum(getattr(t, "n_wrap", 0) for t in ts), seen),
+                                 "frac_wrapped_low": frac(sum(getattr(t, "n_wrap_lo", 0) for t in ts), seen),
                                  "n_seen": seen}
                 res[gname] = {
                     "per_shard_delta_ppl": dppl,
@@ -376,9 +398,12 @@ def main(argv=None) -> int:
     print("=" * 112)
     print(f"PAIRED, segmented LUT (n_seg={args.n_seg}, n_br={args.n_br}, oob={args.oob}, "
           f"noise={args.noise_bits} {args.noise_scale}, cmp_noise={args.cmp_noise_bits})")
+    if args.invsqrt_impl == "openfhe":
+        print(f"1/sqrt: OpenFHE pipeline, {args.newton} Newton step(s), FHEW noise "
+              f"{args.fhew_noise}, CKKS floor {args.ckks_bits} bits, guard {args.guard}")
     print("=" * 112)
     hdr = (f"{'L':>6} {'gate':>14} {'mean d ppl':>12} {'2*SEM':>9} {'verdict':>22}   "
-           f"{'out-of-domain':>13} {'out<0':>9} {'out>1':>9}")
+           f"{'out-of-domain':>13} {'out<0':>9} {'out>1':>9} {'wrapped':>9}")
     print(hdr); print("-" * len(hdr))
     for L, res in out["results"].items():
         for g, r in res.items():
@@ -387,7 +412,7 @@ def main(argv=None) -> int:
             worst = lambda k: max((x[k] for x in d.values() if x[k] == x[k]), default=float("nan"))  # noqa: E731
             print(f"{L:>6} {g:>14} {r['mean_delta_ppl']:+12.4f} {2*r['sem_delta']:9.4f} {v:>22}   "
                   f"{worst('frac_out_of_domain'):13.2e} {worst('frac_out_lt_0'):9.2e} "
-                  f"{worst('frac_out_gt_1'):9.2e}")
+                  f"{worst('frac_out_gt_1'):9.2e} {worst('frac_wrapped'):9.2e}")
     print("-" * len(hdr))
     print("out<0 matters for softplus (Delta) and fused_dt (a); out>1 matters for fused_dt only.")
     print(f"\nwrote {args.out}")
