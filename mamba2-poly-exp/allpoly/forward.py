@@ -305,7 +305,18 @@ class PolyOps(ExactOps):
 # The forward
 # ---------------------------------------------------------------------------
 def allpoly_forward(model, ids, ops: ExactOps, refresh=None, chunk_size=None):
-    """Logits of the Mamba-2 LM with `ops` supplying every non-polynomial operator.
+    """Logits of the Mamba-2 LM with `ops` supplying every non-polynomial operator."""
+    h = allpoly_hidden(model, ids, ops, refresh=refresh, chunk_size=chunk_size)
+    return model.lm_head(h.to(model.lm_head.weight.dtype)).float()
+
+
+def allpoly_hidden(model, ids, ops: ExactOps, refresh=None, chunk_size=None):
+    """The final-norm output, (B, L, d_model) -- what a classification head reads.
+
+    Layer keys: operators are looked up by the loop index i, while the mixer
+    reports `mixer.layer_idx` to the collectors. They agree for the stock model;
+    a model with layers removed (scotus/ builds a 12-layer student) must renumber
+    `layer_idx` to 0..n-1, which `scotus.model.subset_layers` does.
 
     `refresh(layer, site, x) -> x` is applied at "block_in" (the residual stream
     entering each block) and, via the mixer, at the scan's inputs and output.
@@ -331,8 +342,7 @@ def allpoly_forward(model, ids, ops: ExactOps, refresh=None, chunk_size=None):
             refresh=(lambda l, s, x: rf(l, s, x)) if (refresh is not None or ops.record) else None,
         ).float()
     residual = residual + hidden
-    h = ops.norm(len(bb.layers), "norm_f", residual, bb.norm_f.weight, bb.norm_f.eps)
-    return model.lm_head(h.to(model.lm_head.weight.dtype)).float()
+    return ops.norm(len(bb.layers), "norm_f", residual, bb.norm_f.weight, bb.norm_f.eps)
 
 
 def save_calibration(ops: ExactOps, path) -> None:
