@@ -343,15 +343,75 @@ noise to every element and diverges at 8 bits.)
 48 s, peak memory 24 GB. Per token, the 49 norms are ~640 core-seconds of FHEW
 work before conversions.
 
-### 9c. Next
+### 9c. RMSNorm through the benchmarked pipeline, out to L = 8192 (2026-10-30/31)
 
-1. **Cheaper segment selection.** Three large-precision signs are 77% of the FHEW
+§9a's 1/√v is the ideal table (17+ bits, clamped). This replaces it with the
+operator §9b actually built, simulated in plaintext by `real_mamba/ss_invsqrt.py`
+(branch `prenorm-tfhe`, `--invsqrt-impl openfhe`): exact segment comparisons, a
+read position off by N(0, 9.7) positions, phase noise of the same size, sine
+decoding, a **negacyclic** read past either end of the table (it returns the
+entry reflected about the table's midpoint, ~12x too large at v = 2τ_S), then
+Newton and a 2^-15.3 CKKS noise floor. It reproduces the benchmark: 5.5 / 9.7 /
+15.2 relative bits for 0 / 1 / 2 Newton steps against 5.5 / 9.2 / 15.2 measured
+(`real_mamba/tests/test_ss_invsqrt.py`).
+
+Staged pre-norms (24) → gated norms (24) → `norm_f` → all 49, 16 shards of
+wikitext2 validation (30 / 7 / 3 / 1 blocks per shard at L = 512 / 2048 / 4096 /
+8192), table range calibrated on wikitext2 *train*. `cluster/job_prenorm_tfhe.sh`,
+job 1658582, results in `eval/prenorm_tfhe/*.json`. Paired Δppl (exact 27.82 /
+21.54 / 20.73 / 22.66), all 49 norms:
+
+| table range, Newton | L = 512 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|
+| 6 x 1024 tokens, margin 0.05, 2 steps (as benchmarked) | +inf (7/16) | +inf (7/16) | +inf (6/16) | +inf (14/16) |
+| **6 x 8192 tokens, margin 0.5, 2 steps** | **+0.0010 n.s.** | **+0.0000 n.s.** | **−0.0055 n.s.** | **+0.0081** (±0.0042) |
+| 6 x 8192 tokens, margin 0.5, 1 step | +inf (1/16) | +0.0011 n.s. | +inf (1/16) | +0.041 |
+
+(k/16 = shards that went to inf.) By stage, as benchmarked: pre-norms alone
+|Δ| ≤ 0.0003 n.s. and `norm_f` alone 0.0000 at every length; gated norms alone
++0.021 / +0.016 / +0.015 / **+2.7** (±3.1). With the 8k range and 2 steps every
+stage is within ±0.006 up to L = 4096, and the L = 8192 cost is all gated norms.
+
+1. **A read past the table is fatal, not a small error.** As benchmarked, only
+   0.02-0.15% of reads fall past the table, but Newton diverges from the reflected
+   entry, the residual overflows fp16, and every later norm sees inf (up to 88% of
+   `norm_f`'s inputs at L = 8192). §9a's ideal table, clamped, lost only +0.0001
+   on the same inputs. A 2-shard CPU run had shown +0.006 here: too few shards to
+   hit one.
+2. **Gated-norm v grows with sequence length.** Calibrated on 1024-token blocks,
+   the range misses it at 8192 (top 7.2e3; at 8192 tokens 1.4e4). **Calibrate at
+   the longest length that will run.** Pre-norm v barely moves (8.4e3 → 1.0e4).
+3. **Margin buys range only up to a few hundred x per segment.** A segment wider
+   than that puts its low end too many read-noise positions apart for one guess:
+   margin 1.0 (~1,800x per segment) sent the gated norms to +inf in a smoke run,
+   and at margin 0.5 the worst gated table is already down to 9.9 relative bits
+   after 2 steps (7.6 after 1; the median is 15.3 / 12.4). More range means more segments,
+   i.e. more 3.4 s comparisons.
+4. **One Newton step is not enough.** Pre-norms alone cost a small but
+   significant +0.0003-0.0011, and the 7.6-bit tables let a handful of reads past
+   the table (≤ 3e-4) blow up a shard.
+5. **The margin is thin even in the passing row**: one read past the table in
+   ~6e6 at L = 512, harmless that time. The table range comes from 6 train blocks;
+   other text or longer contexts could fall outside it.
+
+So: **4 segments + 2 Newton steps replaces all 49 RMSNorms at no measurable cost
+to L = 4096 and +0.008 (0.04%) at L = 8192**, provided no input ever reaches the
+negacyclic wrap. That has to be enforced, not calibrated.
+
+### 9d. Next
+
+1. **Range guard for 1/√v.** Two more comparisons (v < τ_0, v > τ_S) that clamp
+   the table position to its ends before the lookup, ~7 s per norm. It turns a
+   fatal read into §9a's clamp (+0.0001), and would let the margin and the
+   per-segment span shrink back. Simulate it, rerun the 1024-token/0.05 row, then
+   add it to `bench.cpp`.
+2. **Cheaper segment selection.** Three large-precision signs are 77% of the FHEW
    cost; fewer, smaller-range comparisons (or more segments with small-precision
    signs) are the obvious lever.
-2. **Batch the FHEW→CKKS conversions** (15 calls of 128 values now) and measure
+3. **Batch the FHEW→CKKS conversions** (15 calls of 128 values now) and measure
    how the cost scales with values per call.
-3. Move SiLU / softplus / dt domains to train-split statistics, then run the whole
+4. Move SiLU / softplus / dt domains to train-split statistics, then run the whole
    `all` configuration encrypted — SiLU is 98.5% of the lookups per token
    (43,008 + 36,864 of ~81,000), so its cost decides whether this is practical.
-4. Depth: the table + 2 Newton steps use 24 of 27 levels, so in a full block this sits
+5. Depth: the table + 2 Newton steps use 24 of 27 levels, so in a full block this sits
    right after a CKKS bootstrap.
