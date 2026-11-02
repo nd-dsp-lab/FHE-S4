@@ -35,6 +35,13 @@ What a plaintext SegLUT cannot show and this can: an input past the guard band
 reads a reflected entry (12x too large at v = 2 tau_S), the Newton steps then
 diverge from it, and the output is garbage rather than slightly off. `n_wrap`
 counts those reads, `n_wrap_lo` the ones below the table.
+
+`range_guard` adds two more comparisons, [v < tau_0] and [v > tau_S], and clamps v
+to [tau_0, tau_S] in CKKS before anything else, v_c = v + lo (tau_0 - v) + hi (tau_S - v).
+The table and Newton both see v_c, so an off-table input gets 1/sqrt(v_c) -- the
+plaintext table's clamp -- instead of a reflected entry. (Newton on the raw v would
+diverge from a clamped guess once v > 3 tau_S.) `n_guarded` counts the clamped
+elements; `n_oob` still counts them on the raw input.
 """
 
 from __future__ import annotations
@@ -63,7 +70,8 @@ class SchemeSwitchInvSqrt(nn.Module):
     ct_ct_depth = 0     # the table itself; Newton adds 3 levels per step in CKKS
 
     def __init__(self, tau, q=4096, guard=0.05, phase_frac=0.2, index_noise=8.5,
-                 phase_noise=8.5, newton=2, ckks_bits=15.3, seed=0, name=None):
+                 phase_noise=8.5, newton=2, ckks_bits=15.3, range_guard=False, seed=0,
+                 name=None):
         super().__init__()
         tau = np.asarray(tau, dtype=np.float64).reshape(-1)
         if tau.size < 2 or np.any(np.diff(tau) <= 0) or tau[0] <= 0:
@@ -73,6 +81,7 @@ class SchemeSwitchInvSqrt(nn.Module):
         self.index_noise, self.phase_noise = float(index_noise), float(phase_noise)
         self.newton, self.seed = int(newton), seed
         self.ckks_bits = ckks_bits
+        self.range_guard = bool(range_guard)
         self._name = name or "ss_invsqrt"
         w = (tau[1:] - tau[:-1]) / (self.half - 2 * self.G)
 
@@ -102,7 +111,7 @@ class SchemeSwitchInvSqrt(nn.Module):
 
     def reset_counters(self):
         self.n_seen = self.n_oob = self.n_neg = self.n_gt1 = self.n_wrap = self.n_wrap_lo = 0
-        self.n_nonfinite = 0
+        self.n_nonfinite = self.n_guarded = 0
 
     def reseed(self, seed=None):
         self.seed = self.seed if seed is None else seed
@@ -137,6 +146,9 @@ class SchemeSwitchInvSqrt(nn.Module):
         bad = ~torch.isfinite(vd)
         if bad.any():
             vd = torch.where(bad, tau[0], vd)
+        oob = (vd < tau[0]) | (vd > tau[-1])
+        if self.range_guard:
+            vd = vd.clamp(float(tau[0]), float(tau[-1]))
         seg = torch.zeros_like(vd, dtype=torch.long)
         for k in range(1, self.n_seg):
             seg = seg + (vd >= tau[k]).long()
@@ -155,7 +167,8 @@ class SchemeSwitchInvSqrt(nn.Module):
         if self.track:
             self.n_seen += vd.numel()
             self.n_nonfinite += int(bad.sum())
-            self.n_oob += int(((vd < tau[0]) | (vd > tau[-1])).sum())
+            self.n_oob += int(oob.sum())
+            self.n_guarded += int(oob.sum()) if self.range_guard else 0
             self.n_wrap += int(((p < 0) | (p >= self.half)).sum())
             self.n_wrap_lo += int((p < 0).sum())       # v below the table: small v
             self.n_neg += int((y <= 0).sum())
@@ -189,7 +202,8 @@ class SchemeSwitchInvSqrt(nn.Module):
     def __repr__(self):
         return (f"SchemeSwitchInvSqrt(n_seg={self.n_seg}, q={self.q}, guard={self.G}, "
                 f"index_noise={self.index_noise}, phase_noise={self.phase_noise}, "
-                f"newton={self.newton}, ckks_bits={self.ckks_bits})")
+                f"newton={self.newton}, ckks_bits={self.ckks_bits}, "
+                f"range_guard={self.range_guard})")
 
 
 __all__ = ["SchemeSwitchInvSqrt"]

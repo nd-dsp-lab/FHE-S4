@@ -131,6 +131,9 @@ def main(argv=None) -> int:
                          "STD128, 9.7 the worst segment bench.cpp measured")
     ap.add_argument("--ckks-bits", type=float, default=15.3)
     ap.add_argument("--guard", type=float, default=0.05)
+    ap.add_argument("--range-guard", action="store_true",
+                    help="openfhe 1/sqrt: two more comparisons clamp v to the table's range "
+                         "first, so nothing reads past the table")
     # data
     ap.add_argument("--gate-stats", type=Path, default=Path("runs/gate_stats/gate_stats.json"))
     ap.add_argument("--calib-split", default="validation")
@@ -170,7 +173,7 @@ def main(argv=None) -> int:
                   noise_bits=args.noise_bits, noise_scale=args.noise_scale,
                   cmp_noise_bits=args.cmp_noise_bits)
     ss_kw = dict(newton=args.newton, index_noise=args.fhew_noise, phase_noise=args.fhew_noise,
-                 ckks_bits=args.ckks_bits, guard=args.guard)
+                 ckks_bits=args.ckks_bits, guard=args.guard, range_guard=args.range_guard)
 
     # ------------------------------------------------------------------ install
     ph = patch_transition(model, ExactExp(), chunk_size=args.chunk_size)
@@ -378,6 +381,8 @@ def main(argv=None) -> int:
                                  "frac_wrapped_low": frac(sum(getattr(t, "n_wrap_lo", 0) for t in ts), seen),
                                  # inf/nan inputs: an earlier norm already diverged
                                  "frac_nonfinite": frac(sum(getattr(t, "n_nonfinite", 0) for t in ts), seen),
+                                 # --range-guard: clamped to the table's ends instead
+                                 "frac_guarded": frac(sum(getattr(t, "n_guarded", 0) for t in ts), seen),
                                  "n_seen": seen}
                 res[gname] = {
                     "per_shard_delta_ppl": dppl,
@@ -402,7 +407,8 @@ def main(argv=None) -> int:
           f"noise={args.noise_bits} {args.noise_scale}, cmp_noise={args.cmp_noise_bits})")
     if args.invsqrt_impl == "openfhe":
         print(f"1/sqrt: OpenFHE pipeline, {args.newton} Newton step(s), FHEW noise "
-              f"{args.fhew_noise}, CKKS floor {args.ckks_bits} bits, guard {args.guard}")
+              f"{args.fhew_noise}, CKKS floor {args.ckks_bits} bits, guard {args.guard}, "
+              f"range guard {'on' if args.range_guard else 'off'}")
     print("=" * 112)
     hdr = (f"{'L':>6} {'gate':>14} {'mean d ppl':>12} {'2*SEM':>9} {'verdict':>22}   "
            f"{'out-of-domain':>13} {'out<0':>9} {'out>1':>9} {'wrapped':>9}")

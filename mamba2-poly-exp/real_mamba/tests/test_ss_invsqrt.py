@@ -42,6 +42,17 @@ class TestAgainstBenchmark(unittest.TestCase):
         self.assertGreater(abs(float(rel2[0])), 1.0)
         self.assertLess(abs(float(rel2[1])), 1e-3)
 
+    def test_range_guard_clamps_instead_of_wrapping(self):
+        m = SchemeSwitchInvSqrt(TAU, index_noise=0, phase_noise=0, ckks_bits=None,
+                                range_guard=True)
+        m.track = True
+        v = torch.tensor([10.0 * TAU[-1], 0.1 * TAU[0], 1.0], dtype=torch.float64)
+        y = m(v, newton=2)
+        ends = torch.tensor([TAU[-1], TAU[0]], dtype=torch.float64).rsqrt()
+        self.assertTrue(torch.allclose(y[:2], ends, rtol=1e-3))
+        self.assertAlmostEqual(float(y[2]), 1.0, delta=1e-3)
+        self.assertEqual((m.n_wrap, m.n_guarded, m.n_oob), (0, 2, 2))
+
     def test_nonfinite_input_is_nan_not_a_crash(self):
         # job 1655430: an fp16 residual overflowed to inf and the table read indexed
         # out of bounds (a device-side assert on CUDA)
