@@ -113,3 +113,39 @@ After each stage, re-calibrate and re-fit (training moves the ranges), and every
 fine-tune needs a **control**: the exact model fine-tuned the same way.
 `A_log` and `dt_bias` stay frozen — training them once pushed `a` above 1 on 2–4%
 of tokens.
+
+## Phase B: run it
+
+```bash
+bash allpoly/run_phase_b.sh smoke                  # CPU pipeline check, a few minutes; numbers mean nothing
+bash allpoly/run_phase_b.sh stage1                 # softplus: one control + one run per Q in QS ["5 13"]
+OUT=/groups/tjung/$USER/phase_b bash allpoly/run_phase_b.sh stage1   # if $HOME is short on space
+```
+
+`allpoly/finetune_phase_b.py` is one run; its docstring says what each step does and why.
+`allpoly/compare_phase_b.py <poly run> <control run>` gives the verdict, and refuses to
+compare runs with different recipes or evaluation shards.
+
+**Why Q = 5.** Cost is set by OpenFHE's table, not the degree: Q in 3..5 costs 5 levels
+with the square, 6..13 costs 6. Fine-tuning can only make softplus cheaper by moving it to
+the 5-level tier, and Q = 5 is the best polynomial in that tier. Q = 13 (Phase A's pick)
+is run too, to show what fine-tuning buys at the same cost.
+
+**What one run reports**, at L = 512 and 2048, paired per shard on wikitext-2 validation
+(Phase A's shards, so rows compare across phases):
+
+| row | what it is |
+|---|---|
+| `before` | starting model + polynomial, no training. Stage 1: must match Phase A's `only:softplus` row |
+| `after_refit` | trained, ranges re-measured, polynomial refitted. **The result** |
+| `after_trainfit` | trained, but the fit it trained with. Did the refit matter? |
+| `after_exact` | trained weights, every operator exact. What training did by itself |
+| range drift | per operator: how much training widened the ranges, and the share of channels whose new range leaves the old fit's interval |
+| overfitting monitor | train-sample vs held-out (wikitext-2 test) NLL during training; a widening gap is overfitting |
+
+The verdict is `after_refit` vs the control's `after`. A "not distinguishable" with
+2 SEM above 0.5 ppl is printed as UNSTABLE: a wide interval is not a pass.
+
+**Later stages** start from the previous stage and list every installed operator:
+`--ops softplus silu_norm --init-from <stage-1 run>` (fits to its `refit_calib.pt`), with
+the control continuing from the stage-1 control (`--control --init-from <stage-1 control>`).
