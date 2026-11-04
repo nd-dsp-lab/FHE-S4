@@ -1,0 +1,78 @@
+== seglut 1/sqrt(v), OpenFHE scheme switching, 128-bit, slots 128, threads 20
+CKKS ring 131072, depth 27 | FHEW n 1305, N 2048, q 4096, logQ 25, beta 128 | table 2048 positions/segment, guard 102
+
+levels left on the output: 11 of 27 (after 2 Newton steps: 3)
+
+-- diagnostics (secret-key, own segment only)
+  compare tau_1 = 0.0758381: wrong 0/65 (worst at 0% from the boundary), bit rms err 1.52321e-07
+  compare tau_2 = 4.57396: wrong 0/96 (worst at 0% from the boundary), bit rms err 4.13831e-07
+  compare tau_3 = 275.865: wrong 0/128 (worst at 0% from the boundary), bit rms err 4.12425e-07
+  segment 0 all slots: max|E| 30.6089 max|slope| 0.636087 max|out_interp| 40.1926 | own slots: max slope err 0.0167638 (slope range -0.633834..-0.000895009)
+  segment 0 [0.00125743, 0.0758381]: index noise rms 8.41992 max 21.2458 positions; table-output phase noise rms 9.71468 max 32 (of +-819.2); f decode err rms 5.99948; rounding-error decode err rms 0.00300396
+  segment 1 all slots: max|E| 31.7044 max|slope| 0.0818294 max|out_interp| 5.98519 | own slots: max slope err 0.000383224 (slope range -0.0816156..-0.000115246)
+  segment 1 [0.0758381, 4.57396]: index noise rms 8.96173 max 19.2691 positions; table-output phase noise rms 7.45403 max 18 (of +-819.2); f decode err rms 4.39686; rounding-error decode err rms 0.00295194
+  segment 2 all slots: max|E| 29.6017 max|slope| 0.0105538 max|out_interp| 0.747633 | own slots: max slope err 0.00439174 (slope range -0.0105092..-1.48396e-05)
+  segment 2 [4.57396, 275.865]: index noise rms 8.94159 max 18.3375 positions; table-output phase noise rms 8.62228 max 19 (of +-819.2); f decode err rms 5.43021; rounding-error decode err rms 0.00260257
+  segment 3 all slots: max|E| 23.2847 max|slope| 0.00135958 max|out_interp| 0.0974028 | own slots: max slope err 1.08202e-05 (slope range -0.00135322..-1.91082e-06)
+  segment 3 [275.865, 16638]: index noise rms 6.25252 max 12.5487 positions; table-output phase noise rms 9.59492 max 22 (of +-819.2); f decode err rms 4.82046; rounding-error decode err rms 0.00327626
+
+-- precision vs exact 1/sqrt(v)  (bits = -log2 RMSE, ROSETTA's definition)
+  segment             n   bits(interp)  bits(nearest)  max|err| interp  rel-bits interp
+  seg 0              32       2.85572        1.86543         0.543973          5.47701
+  seg 1              32       6.31549        6.27802        0.0291283          5.95367
+  seg 2              32       7.12114        5.71502        0.0383936          5.32604
+  seg 3              32       12.0833        12.1636      0.000507198          5.55771
+  all               128       3.84785        2.86039         0.543973          5.54437
+
+-- worst 5 values (interp, before Newton)
+  v 6.10399 seg 2 exact 0.404756 got 0.366362 | lt1..3 1 6.49347e-09 1 | M*out: 1.88276e-07 1.75032e-09 0.366361 -7.07542e-12 | own out 0.366361
+  v 0.0202468 seg 0 exact 7.02784 got 7.57181 | lt1..3 1 1 1 | M*out: 7.57181 7.01259e-08 1.82537e-10 4.20994e-08 | own out 7.57182
+  v 0.0328161 seg 0 exact 5.52022 got 5.86563 | lt1..3 1 1 1 | M*out: 5.86564 4.43594e-10 5.01101e-09 1.5622e-11 | own out 5.86564
+  v 7699.05 seg 3 exact 0.0113968 got 0.011904 | lt1..3 3.27395e-10 1 3.48822e-10 | M*out: 2.97404e-10 6.22672e-10 -6.48217e-13 0.0119038 | own out 0.0119038
+  v 13809.4 seg 3 exact 0.00850966 got 0.00813406 | lt1..3 2.73606e-10 1.73013e-10 3.45465e-10 | M*out: -7.76537e-10 -2.29661e-10 3.2602e-11 0.00813352 | own out 0.00813352
+
+-- + Newton steps on the interpolated output
+  steps   bits(all)  rel-bits(all)  rel-bits worst segment  max rel err
+      0     3.84785        5.54456                 5.32602    0.0948582
+      1     7.25247        9.19844                 8.68135    0.0130708
+      2     13.5441        15.2443                 14.4349  0.000255156
+
+-- latency, wall clock, 128 values in one ciphertext
+  1 cmp: CKKS->FHEW x3                           4.91863 s
+  1 cmp: FHEW EvalSign x3                        169.289 s
+  1 cmp: FHEW->CKKS x3                            97.017 s
+  1 cmp: switch precompute x3 (cacheable)        2.47141 s
+  2 lut: CKKS->FHEW x4                           6.70676 s
+  2 lut: FHEW EvalFunc x8 (+diag)                55.8914 s
+  2 lut: FHEW->CKKS x12                          412.456 s
+  2 lut: switch precompute (cacheable)          0.825511 s
+  3+4 interpolate + select (CKKS)                6.45849 s
+  5 Newton steps (CKKS)                          1.45269 s
+  keygen (offline)                               48.3669 s
+  unit: one EvalFunc, 1 thread                  0.376365 s
+  unit: one EvalSign, 1 thread                   3.37013 s
+  online total (excl. keygen and cacheable precomputes): 752.737 s = 5.88076 s per value
+  FHEW single-thread work per value: 3 EvalSign + 8 EvalFunc = 13.1213 s
+	Command being timed: "./build/bench --slots 128 --depth 27"
+	User time (seconds): 11162.67
+	System time (seconds): 22.01
+	Percent of CPU this job got: 1350%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:48.09
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 24005568
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 38
+	Minor (reclaiming a frame) page faults: 7603241
+	Voluntary context switches: 206934
+	Involuntary context switches: 151951
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

@@ -130,8 +130,11 @@ def mamba2_reference_forward(mixer, u, transition, chunk_size=None,
         # One polynomial per head for x -> exp(A*softplus(x+b)). Delta is never
         # materialised, so we hand the scan a=fused(dt_raw) directly and give it
         # Delta=softplus(...) only for the INPUT weighting b_t = Delta*B*x, which
-        # is a separate use and still needs a real Delta.
-        dt = F.softplus(dt_raw + mixer.dt_bias.float())
+        # is a separate use and still needs a real Delta. If a softplus gate is
+        # ALSO given it supplies that Delta, so the whole dt path can be replaced
+        # (eval/seglut_paired.py `all`). No other caller passes both.
+        dt = (softplus_gate(dt_raw + mixer.dt_bias.float()) if softplus_gate is not None
+              else F.softplus(dt_raw + mixer.dt_bias.float()))
     elif softplus_gate is not None:
         dt = softplus_gate(dt_raw + mixer.dt_bias.float())
     else:

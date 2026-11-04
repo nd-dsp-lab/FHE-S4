@@ -15,6 +15,13 @@ easy one.**
 Measured on `state-spaces/mamba2-130m`, wikitext-2, degree 4, per-channel
 intervals, no training. Baseline (everything exact) 18.1368.
 
+> **Update 2026-10-28 (§9):** segmented lookup tables (ROSETTA-style, evaluated in
+> TFHE rather than as CKKS polynomials) replace every gate in this table at once
+> for **+0.017 / +0.016** paired perplexity (L = 512 / 2048), and the RMSNorm
+> 1/√· table has been run encrypted in OpenFHE at 128-bit security: 15.2 bits
+> relative with two Newton steps. The polynomial rows above are kept as the record
+> of what failed and why.
+
 ---
 
 ## 1. Depth is a per-layer budget, and it is the thing to minimise
@@ -225,3 +232,231 @@ satisfy that a polynomial does not".
    recovers essentially nothing because there was no gap; here there are real
    gaps of +0.3 to +4, so fine-tuning has something to actually recover. This is
    the most likely route to making SiLU viable.
+
+---
+
+## 9. Segmented lookup tables: the gates the polynomials could not do (2026-10-27/28)
+
+Prompted by ROSETTA (Yu et al., CCS '26, arXiv 2609.16915): hybrid CKKS/TFHE, where
+a non-polynomial function is a TFHE lookup of `N_seg` segments x 2048 entries with
+linear interpolation, and CKKS keeps the linear algebra. Two questions: does a
+table of that shape preserve the model in plaintext, and what precision does it
+actually get encrypted?
+
+Code is on the `seglut-sim` branch (CRC: `/groups/tjung/jzhao7/FHEMAMBA-seglut`):
+`real_mamba/seglut.py` (the table, plus RMSNorm / gated-norm modules whose
+1/√v is a table), `eval/seglut_paired.py` (same shards and verdict rule as the
+paired test above: 16 shards, significant if |mean| > 2·SEM),
+`cluster/job_seglut*.sh`, results in `eval/seglut/*.json`. The encrypted
+benchmark is `fhe/seglut_invsqrt/` (built and run on tjws-03).
+
+### 9a. Plaintext tables: what matters is the edge of the table, not its precision
+
+4 segments, 2048 entries each, linear interpolation. Boundaries are geometric for
+1/√v (its input spans 6e6) and uniform otherwise; per-channel domains for SiLU /
+softplus / fused dt come from `runs/gate_stats/gate_stats.json` (the same file the
+polynomials were fitted on), widened 5%. Table precision alone is 17-28 bits for
+every table, so any loss below comes from somewhere else.
+
+Paired Δppl, L = 512 / 2048 (exact 27.82 / 21.54; n.s. = not significant):
+
+| gate | clamp | **extend** (1/√v ranges calibrated on *train*) | wrap | clamp + 12-bit abs noise | extend + 12-bit abs noise |
+|---|---|---|---|---|---|
+| 1/√v, all 49 norms | −0.0000 n.s. / +0.0002 n.s. | +0.0001 n.s. / +0.0001 n.s. | +inf / +inf | +0.049 / +0.042 | +0.049 / +0.042 |
+| fused `exp(A·softplus)` | +0.0003 n.s. / +0.0002 n.s. | +0.0001 n.s. / +0.0001 | +0.63 / +2.18 | +0.0002 n.s. / +0.0004 n.s. | −0.0000 n.s. / +0.0003 n.s. |
+| softplus alone | −0.0004 n.s. / +0.0008 n.s. | **+inf / +inf** | +inf / +inf | +0.065 / +0.043 | +inf / +inf |
+| SiLU after conv | +0.35 / +0.28 | **+0.011 / +0.012** | +22.8 / +17.0 | +0.35 / +0.28 | +0.011 / +0.012 |
+| SiLU in gated norm | +0.14 / +0.10 | **+0.005 / +0.003** | +21.6 / +15.4 | +0.14 / +0.10 | +0.005 / +0.003 |
+| **all of the above** | +0.58 / +0.45 | **+0.017 / +0.016** | +inf / +inf | +0.63 / +0.49 | +0.067 / +0.058 |
+
+What the columns do with inputs outside the table (0.01-0.1% of them):
+**clamp** holds the edge value, **extend** continues the end segments' lines,
+**wrap** is what a negacyclic blind rotation literally computes (the sign flips).
+
+1. **wrap kills everything.** A fraction of a percent of off-table inputs is enough.
+   The encrypted protocol must clamp the table index.
+2. **SiLU's whole loss under clamp was the clamp.** SiLU(x) ≈ x for large x, so
+   holding the edge value throws away signal. Linear tails cut it 25-50x.
+3. **The decay must come from the fused table, never softplus followed by exp.**
+   Softplus alone diverges under extend (the lower tail goes negative, Δ < 0,
+   a > 1) and under output-scaled noise; inside `all` the fused table supplies the
+   decay (bounded in [0, 1]) and softplus only weights the input, so it is harmless.
+   So: **fused dt + softplus clamped, SiLU extended, 1/√v either.**
+4. Noise at 12 bits absolute costs +0.05 through the norms (`norm_f` is most of it).
+
+Remaining gap: the SiLU / softplus / dt domains are still from validation
+statistics; only the 1/√v ranges have been moved to train.
+
+### 9b. Encrypted 1/√v in OpenFHE 1.2.1, 128-bit
+
+`fhe/seglut_invsqrt/bench.cpp`, stock OpenFHE (nothing modified or installed),
+CKKS ring 2^17 / depth 27, FHEW STD128 (n = 1305, N = 2048, q = 4096). 128
+values sampled across the 4 segments of [0.0013, 16638]:
+
+1. **segment index**: 3 comparisons, each CKKS→FHEW of (v − τ_k), large-precision
+   `EvalSign`, FHEW→CKKS. One sign cannot resolve a 6e6 range, so each comparison
+   has its own scale and is trusted only up to 1.2·τ_{k+1}; the masks are built so
+   an untrusted comparison is always multiplied by a trusted 0.
+2. **tables**, construct-then-select: per segment, an affine map to table
+   positions, CKKS→FHEW, a manual modulus switch to q, and `EvalFunc` with a
+   hand-built **negacyclic 2048-entry table** (one bootstrap). OpenFHE's own
+   `GenerateLUTviaFunction` allows only q/256 = 8 entries.
+3. **exact interpolation**: the index the bootstrap reads is ~9 positions from the
+   true one, but that offset is a public-coefficient linear function of the key,
+   so it is returned to CKKS exactly (to 0.003 positions) and the interpolation
+   uses the index that was actually read.
+4. **select** with mask products, after sharpening each comparison bit with
+   x²(3 − 2x). Without it, a 2.5e-4 bit error times segment 0's outputs (up to
+   ~45) leaked into segment 3's outputs (~0.008): up to 70% error.
+5. **Newton** on the selected output, y ← y(3 − v·y²)/2, CKKS only, 4 levels.
+
+| | rel. bits | worst segment | max rel. error | ROSETTA bits (−log2 RMSE) |
+|---|---|---|---|---|
+| table + interpolation | 5.5 | 5.3 | 9.5% | 3.8 |
+| + 1 Newton step | 9.2 | 8.7 | 1.3% | 7.3 |
+| + 2 Newton steps | **15.2** | 14.4 | 0.03% | 13.5 |
+
+(TOY parameters, n = 32: 8.4 → 15.4 → 22.6.) Comparisons: 0 wrong out of 289.
+
+**Why the table alone stops near 5 bits.** Every FHEW result is modulus-switched
+back to q = 4096, which adds noise of √(n/18) ≈ 8.5 units (measured 7.5-9.7 in
+every segment; 1.3 at TOY's n = 32, matching the same formula). FHEW→CKKS decodes
+through a sine, so outputs must stay within ±0.2q ≈ ±820 units: ~7 bits of each
+table's output range, minus ~2 more because 1/√v varies 7.7x inside a 60x-wide
+segment. ROSETTA avoids the final modulus switch by packing the blind-rotation
+output straight into CKKS, which OpenFHE does not expose.
+
+**Why Newton is now alive.** §6 deferred RMSNorm and Newton (Path B) died because
+no starting guess holds over v's 6e6 range. The table is that guess: ~5 bits
+relative everywhere, from which each step roughly squares the error.
+
+**How many bits are enough.** `--noise-scale rel` (new; error proportional to the
+output, which is the shape the benchmark measured) on all 49 norms, small-scale
+(8 shards x 2 blocks, L = 512, CPU): 5.2 bits **+0.25** (significant), 8.1 bits
++0.004 n.s., 12 bits +0.001 n.s. One Newton step is about at the threshold; two
+clear it. (The older `range` mode is no proxy: it applies the largest output's
+noise to every element and diverges at 8 bits.)
+
+**Cost**, single core per value: 3 `EvalSign` at 3.4 s + 8 `EvalFunc` at 0.38 s
+= 13.1 s of FHEW work, 77% of it the comparisons. Wall clock on 20 threads,
+128 values: 753 s, of which FHEW→CKKS (15 batched calls) is 510 s. Key generation
+48 s, peak memory 24 GB. Per token, the 49 norms are ~640 core-seconds of FHEW
+work before conversions.
+
+### 9c. RMSNorm through the benchmarked pipeline, out to L = 8192 (2026-10-30/31)
+
+§9a's 1/√v is the ideal table (17+ bits, clamped). This replaces it with the
+operator §9b actually built, simulated in plaintext by `real_mamba/ss_invsqrt.py`
+(branch `prenorm-tfhe`, `--invsqrt-impl openfhe`): exact segment comparisons, a
+read position off by N(0, 9.7) positions, phase noise of the same size, sine
+decoding, a **negacyclic** read past either end of the table (it returns the
+entry reflected about the table's midpoint, ~12x too large at v = 2τ_S), then
+Newton and a 2^-15.3 CKKS noise floor. It reproduces the benchmark: 5.5 / 9.7 /
+15.2 relative bits for 0 / 1 / 2 Newton steps against 5.5 / 9.2 / 15.2 measured
+(`real_mamba/tests/test_ss_invsqrt.py`).
+
+Staged pre-norms (24) → gated norms (24) → `norm_f` → all 49, 16 shards of
+wikitext2 validation (30 / 7 / 3 / 1 blocks per shard at L = 512 / 2048 / 4096 /
+8192), table range calibrated on wikitext2 *train*. `cluster/job_prenorm_tfhe.sh`,
+job 1658582, results in `eval/prenorm_tfhe/*.json`. Paired Δppl (exact 27.82 /
+21.54 / 20.73 / 22.66), all 49 norms:
+
+| table range, Newton | L = 512 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|
+| 6 x 1024 tokens, margin 0.05, 2 steps (as benchmarked) | +inf (7/16) | +inf (7/16) | +inf (6/16) | +inf (14/16) |
+| **6 x 8192 tokens, margin 0.5, 2 steps** | **+0.0010 n.s.** | **+0.0000 n.s.** | **−0.0055 n.s.** | **+0.0081** (±0.0042) |
+| 6 x 8192 tokens, margin 0.5, 1 step | +inf (1/16) | +0.0011 n.s. | +inf (1/16) | +0.041 |
+
+(k/16 = shards that went to inf.) By stage, as benchmarked: pre-norms alone
+|Δ| ≤ 0.0003 n.s. and `norm_f` alone 0.0000 at every length; gated norms alone
++0.021 / +0.016 / +0.015 / **+2.7** (±3.1). With the 8k range and 2 steps every
+stage is within ±0.006 up to L = 4096, and the L = 8192 cost is all gated norms.
+
+1. **A read past the table is fatal, not a small error.** As benchmarked, only
+   0.02-0.15% of reads fall past the table, but Newton diverges from the reflected
+   entry, the residual overflows fp16, and every later norm sees inf (up to 88% of
+   `norm_f`'s inputs at L = 8192). §9a's ideal table, clamped, lost only +0.0001
+   on the same inputs. A 2-shard CPU run had shown +0.006 here: too few shards to
+   hit one.
+2. **Gated-norm v grows with sequence length.** Calibrated on 1024-token blocks,
+   the range misses it at 8192 (top 7.2e3; at 8192 tokens 1.4e4). **Calibrate at
+   the longest length that will run.** Pre-norm v barely moves (8.4e3 → 1.0e4).
+3. **Margin buys range only up to a few hundred x per segment.** A segment wider
+   than that puts its low end too many read-noise positions apart for one guess:
+   margin 1.0 (~1,800x per segment) sent the gated norms to +inf in a smoke run,
+   and at margin 0.5 the worst gated table is already down to 9.9 relative bits
+   after 2 steps (7.6 after 1; the median is 15.3 / 12.4). More range means more segments,
+   i.e. more 3.4 s comparisons.
+4. **One Newton step is not enough.** Pre-norms alone cost a small but
+   significant +0.0003-0.0011, and the 7.6-bit tables let a handful of reads past
+   the table (≤ 3e-4) blow up a shard.
+5. **The margin is thin even in the passing row**: one read past the table in
+   ~6e6 at L = 512, harmless that time. The table range comes from 6 train blocks;
+   other text or longer contexts could fall outside it.
+
+So: **4 segments + 2 Newton steps replaces all 49 RMSNorms at no measurable cost
+to L = 4096 and +0.008 (0.04%) at L = 8192**, provided no input ever reaches the
+negacyclic wrap. That has to be enforced, not calibrated (§9d).
+
+### 9d. The range guard (2026-11-03)
+
+`--range-guard` (`real_mamba/ss_invsqrt.py`): two more comparisons, [v < τ_0] and
+[v > τ_S], clamp v to [τ_0, τ_S] in CKKS before the lookup,
+v_c = v + lo (τ_0 − v) + hi (τ_S − v). The table and Newton both see v_c, so an
+input off the table gets 1/√τ at the nearer end instead of a reflected entry.
+`cluster/job_prenorm_guard.sh`, job 1670192, same shards and calibration data as
+§9c, results in `eval/prenorm_tfhe/*_g*.json`. Paired Δppl, all 49 norms
+(± = 2 s.e.):
+
+| table range, Newton | guard | L = 512 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|---|
+| 6 x 1024 tokens, margin 0.05, 2 steps (§9c) | off | +inf | +inf | +inf | +inf |
+| 6 x 1024 tokens, margin 0.05, 2 steps | on | +0.0024 | +0.0018 | +0.0030 | +0.046 n.s. (±0.051) |
+| **6 x 8192 tokens, margin 0.05, 2 steps** | **on** | **+0.0001 n.s.** | **+0.0001 n.s.** | **+0.0002** | **+0.0005 n.s.** (±0.0007) |
+| 6 x 8192 tokens, margin 0.05, 1 step | on | +0.0002 n.s. | +0.0002 | +0.0006 | +0.0038 (±0.0016) |
+| 6 x 8192 tokens, margin 0.5, 2 steps (§9c) | off | +0.0010 n.s. | +0.0000 n.s. | −0.0055 n.s. | +0.0081 (±0.0042) |
+
+No guarded run has a wrapped read, a non-finite value or a lost shard.
+
+1. **The guard is what lets the margin shrink, and that is where the accuracy
+   comes from.** With the 8k range it clamps under 6e-5 of inputs: validation values
+   past the train range, each of which would have been a fatal wrap, which is why
+   §9c needed margin 0.5. At margin 0.05 every table is back at 15.3 relative bits
+   after 2 steps (the worst gated table was 9.9 at margin 0.5), and the L = 8192
+   cost drops 16x, +0.0081 → +0.0005, no longer significant.
+2. **One Newton step is now safe**: +0.0038 (0.017%) at L = 8192, every shard
+   finite (§9c lost two). Worst gated table 11.0 relative bits (7.6 at margin
+   0.5). The cost is the gated norms (+0.0033) and pre-norms (+0.0005); it saves
+   3 levels.
+3. **The guard does not replace calibrating at the longest length.** With the
+   1k range it clamps 0.04-0.2% of inputs (gated norms 2.0e-3 and `norm_f`
+   1.3e-3 at L = 8192), and 1/√τ_S overestimates 1/√v on exactly the inputs
+   that grew with length: +0.046 at L = 8192, carried by two shards (+0.18,
+   +0.39; the other 14 are −0.001 to +0.024). Fatal becomes bounded, not free.
+4. **Cost, not yet benchmarked.** Two more `EvalSign` on top of three: +6.8 s of
+   single-core FHEW work per value if they are not batched with the others
+   (13.1 → ~20 s). The clamp as simulated runs in CKKS, so in `bench.cpp` the
+   two guard signs would come back from FHEW before the main switch: one more
+   round trip and at least one level.
+
+So: **with the guard, 4 segments + 2 Newton steps replace all 49 RMSNorms at no
+measurable cost to L = 8192 (+0.0005 n.s.), and 1 step costs +0.0038.** What is
+left open is latency and depth, not accuracy.
+
+### 9e. Next
+
+1. **Range guard in `bench.cpp`.** Measure the two extra signs, the clamp's level,
+   and whether the guard signs can share a batch with the segment signs; check the
+   encrypted precision against §9d at margin 0.05.
+2. **Cheaper segment selection.** Three large-precision signs are 77% of the FHEW
+   cost; fewer, smaller-range comparisons (or more segments with small-precision
+   signs) are the obvious lever.
+3. **Batch the FHEW→CKKS conversions** (15 calls of 128 values now) and measure
+   how the cost scales with values per call.
+4. Move SiLU / softplus / dt domains to train-split statistics, then run the whole
+   `all` configuration encrypted — SiLU is 98.5% of the lookups per token
+   (43,008 + 36,864 of ~81,000), so its cost decides whether this is practical.
+5. Depth: the table + 2 Newton steps use 24 of 27 levels (21 with the one step
+   §9d.2 allows), so in a full block this sits right after a CKKS bootstrap, and
+   x · 1/√v inherits the side branch's 3 remaining levels unless the chain is
+   resized.
