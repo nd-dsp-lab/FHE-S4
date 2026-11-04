@@ -396,15 +396,58 @@ stage is within ±0.006 up to L = 4096, and the L = 8192 cost is all gated norms
 
 So: **4 segments + 2 Newton steps replaces all 49 RMSNorms at no measurable cost
 to L = 4096 and +0.008 (0.04%) at L = 8192**, provided no input ever reaches the
-negacyclic wrap. That has to be enforced, not calibrated.
+negacyclic wrap. That has to be enforced, not calibrated (§9d).
 
-### 9d. Next
+### 9d. The range guard (2026-11-03)
 
-1. **Range guard for 1/√v.** Two more comparisons (v < τ_0, v > τ_S) that clamp
-   the table position to its ends before the lookup, ~7 s per norm. It turns a
-   fatal read into §9a's clamp (+0.0001), and would let the margin and the
-   per-segment span shrink back. Simulate it, rerun the 1024-token/0.05 row, then
-   add it to `bench.cpp`.
+`--range-guard` (`real_mamba/ss_invsqrt.py`): two more comparisons, [v < τ_0] and
+[v > τ_S], clamp v to [τ_0, τ_S] in CKKS before the lookup,
+v_c = v + lo (τ_0 − v) + hi (τ_S − v). The table and Newton both see v_c, so an
+input off the table gets 1/√τ at the nearer end instead of a reflected entry.
+`cluster/job_prenorm_guard.sh`, job 1670192, same shards and calibration data as
+§9c, results in `eval/prenorm_tfhe/*_g*.json`. Paired Δppl, all 49 norms
+(± = 2 s.e.):
+
+| table range, Newton | guard | L = 512 | 2048 | 4096 | 8192 |
+|---|---|---|---|---|---|
+| 6 x 1024 tokens, margin 0.05, 2 steps (§9c) | off | +inf | +inf | +inf | +inf |
+| 6 x 1024 tokens, margin 0.05, 2 steps | on | +0.0024 | +0.0018 | +0.0030 | +0.046 n.s. (±0.051) |
+| **6 x 8192 tokens, margin 0.05, 2 steps** | **on** | **+0.0001 n.s.** | **+0.0001 n.s.** | **+0.0002** | **+0.0005 n.s.** (±0.0007) |
+| 6 x 8192 tokens, margin 0.05, 1 step | on | +0.0002 n.s. | +0.0002 | +0.0006 | +0.0038 (±0.0016) |
+| 6 x 8192 tokens, margin 0.5, 2 steps (§9c) | off | +0.0010 n.s. | +0.0000 n.s. | −0.0055 n.s. | +0.0081 (±0.0042) |
+
+No guarded run has a wrapped read, a non-finite value or a lost shard.
+
+1. **The guard is what lets the margin shrink, and that is where the accuracy
+   comes from.** With the 8k range it clamps under 6e-5 of inputs: validation values
+   past the train range, each of which would have been a fatal wrap, which is why
+   §9c needed margin 0.5. At margin 0.05 every table is back at 15.3 relative bits
+   after 2 steps (the worst gated table was 9.9 at margin 0.5), and the L = 8192
+   cost drops 16x, +0.0081 → +0.0005, no longer significant.
+2. **One Newton step is now safe**: +0.0038 (0.017%) at L = 8192, every shard
+   finite (§9c lost two). Worst gated table 11.0 relative bits (7.6 at margin
+   0.5). The cost is the gated norms (+0.0033) and pre-norms (+0.0005); it saves
+   3 levels.
+3. **The guard does not replace calibrating at the longest length.** With the
+   1k range it clamps 0.04-0.2% of inputs (gated norms 2.0e-3 and `norm_f`
+   1.3e-3 at L = 8192), and 1/√τ_S overestimates 1/√v on exactly the inputs
+   that grew with length: +0.046 at L = 8192, carried by two shards (+0.18,
+   +0.39; the other 14 are −0.001 to +0.024). Fatal becomes bounded, not free.
+4. **Cost, not yet benchmarked.** Two more `EvalSign` on top of three: +6.8 s of
+   single-core FHEW work per value if they are not batched with the others
+   (13.1 → ~20 s). The clamp as simulated runs in CKKS, so in `bench.cpp` the
+   two guard signs would come back from FHEW before the main switch: one more
+   round trip and at least one level.
+
+So: **with the guard, 4 segments + 2 Newton steps replace all 49 RMSNorms at no
+measurable cost to L = 8192 (+0.0005 n.s.), and 1 step costs +0.0038.** What is
+left open is latency and depth, not accuracy.
+
+### 9e. Next
+
+1. **Range guard in `bench.cpp`.** Measure the two extra signs, the clamp's level,
+   and whether the guard signs can share a batch with the segment signs; check the
+   encrypted precision against §9d at margin 0.05.
 2. **Cheaper segment selection.** Three large-precision signs are 77% of the FHEW
    cost; fewer, smaller-range comparisons (or more segments with small-precision
    signs) are the obvious lever.
@@ -413,5 +456,7 @@ negacyclic wrap. That has to be enforced, not calibrated.
 4. Move SiLU / softplus / dt domains to train-split statistics, then run the whole
    `all` configuration encrypted — SiLU is 98.5% of the lookups per token
    (43,008 + 36,864 of ~81,000), so its cost decides whether this is practical.
-5. Depth: the table + 2 Newton steps use 24 of 27 levels, so in a full block this sits
-   right after a CKKS bootstrap.
+5. Depth: the table + 2 Newton steps use 24 of 27 levels (21 with the one step
+   §9d.2 allows), so in a full block this sits right after a CKKS bootstrap, and
+   x · 1/√v inherits the side branch's 3 remaining levels unless the chain is
+   resized.
