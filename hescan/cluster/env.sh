@@ -16,6 +16,7 @@ set -uo pipefail
 : "${FHE_OPT:?set FHE_OPT to the install prefix in group space}"
 : "${FHE_SRC:=${FHE_OPT%/opt}/src}"
 export FHE_ROOT FHE_OPT FHE_SRC
+export HESCAN_SRC="$FHE_SRC"
 
 export HESCAN_OPENFHE_PREFIX="${HESCAN_OPENFHE_PREFIX:-$FHE_OPT/openfhe-1.6.1-fides}"
 export HESCAN_FIDESLIB_PREFIX="${HESCAN_FIDESLIB_PREFIX:-$FHE_OPT/fideslib}"

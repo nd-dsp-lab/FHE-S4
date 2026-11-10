@@ -156,6 +156,17 @@ HEScanGPU::HEScanGPU(CC cc, Config cfg, const lbcrypto::PublicKey<lbcrypto::DCRT
     I.N     = I.cc->GetRingDimension();
     I.cfg.Validate(I.N / 2);
 
+    // Fail with a readable message here: without a usable device FIDESlib aborts deep inside
+    // context creation instead of throwing.
+    int count       = 0;
+    cudaError_t err = cudaGetDeviceCount(&count);
+    if (err != cudaSuccess)
+        throw std::runtime_error(std::string("no usable CUDA device: ") + cudaGetErrorString(err) +
+                                 " (check nvidia-smi, and that the driver supports this CUDA toolkit)");
+    if (device < 0 || device >= count)
+        throw std::runtime_error("CUDA device " + std::to_string(device) + " requested, but only " +
+                                 std::to_string(count) + " visible (CUDA_VISIBLE_DEVICES?)");
+
     // Device context from the OpenFHE parameters (moduli, scaling factors, dnum, technique).
     FC::RawParams raw = FC::GetRawParams(I.cc);
     FC::Parameters base{};

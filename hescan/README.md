@@ -142,6 +142,61 @@ cmake .. [-DOpenFHE_DIR=<prefix>/lib/OpenFHE] && make -j
 `hescan/` is a standalone CMake project. The top-level `CMakeLists.txt` hard-codes
 `/usr/local/include/openfhe` for older demos, so it is left untouched.
 
+## GPU backend (FIDESlib)
+
+`HEScanGPU` (`hescan_gpu.{h,cpp}`) runs the same kernel on an NVIDIA GPU through
+[FIDESlib](https://github.com/CAPS-UMU/FIDESlib) 2.2. OpenFHE still builds the context,
+generates every key, encrypts and decrypts. Only `Run` moves to the device: each token's
+packet is uploaded, every split, broadcast, scan and contraction step runs on the GPU, and
+only the outputs come back as ordinary OpenFHE ciphertexts.
+
+* **Same operations, same depth.** The GPU kernel issues the CPU kernel's operations one for
+  one, and FIDESlib mirrors OpenFHE's FLEXIBLEAUTO/FIXEDAUTO level handling, so
+  `Config::Depth()` and the parameter set are unchanged. `--compare 1` runs both kernels on
+  the same ciphertexts and reports the difference and how many outputs are bit-identical.
+* **Low-level FIDESlib layer.** FIDESlib's OpenFHE-style `fideslib::` API has no conjugation,
+  so the backend uses `FIDESlib::CKKS` directly, as FIDESlib's own interop tests do.
+* **Rotation keys.** FIDESlib derives a key's automorphism as `5^index mod 2N` with an
+  unsigned exponent, so negative (right-shift) indices are loaded as `index mod N/2`. That
+  names the same automorphism, because 5 has order N/2 mod 2N.
+* **One host thread.** A FIDESlib context shares key-switching scratch buffers, so the GPU path
+  does not use the OpenMP loops (`schedule.h` takes a `parallel` flag).
+* **Dependencies.** FIDESlib needs CUDA 12 or 13, a GPU with compute capability 7.0 or higher,
+  GCC 11 or newer, CMake 3.25.2 or newer, and **OpenFHE 1.6.1 with FIDESlib's patch**,
+  installed static. The GPU build links that OpenFHE and no other.
+
+### Running it on a GPU machine
+
+The NVIDIA driver and a CUDA 12/13 toolkit must be installed. The toolkit can go in your
+home directory without root; see `gpu_setup.sh check`. Then:
+
+```bash
+hescan/gpu_setup.sh check          # GPU, driver, toolkit, gcc, cmake
+hescan/gpu_setup.sh fetch deps     # patched OpenFHE 1.6.1 + FIDESlib into ~/fhe (once)
+hescan/gpu_setup.sh hescan         # build with -DHESCAN_GPU=ON into hescan/build-gpu
+hescan/gpu_setup.sh test           # toy-N sweep: CPU, then GPU checked against CPU
+hescan/gpu_setup.sh bench          # N=2^15 / 2^16, CPU vs GPU on the same packet
+```
+
+Variables at the top of `gpu_setup.sh` change the install location (`FHE_PREFIX`), the toolkit
+(`CUDA_PATH`) and the target architectures (`HESCAN_CUDA_ARCH`, default `auto`). By hand, the
+HEScan part is:
+
+```bash
+cmake -S hescan -B hescan/build-gpu -DHESCAN_GPU=ON \
+      -DOpenFHE_DIR=<openfhe-1.6.1-prefix>/lib/OpenFHE \
+      -Dfideslib_DIR=<fideslib-prefix>/share/fideslib/cmake -DCUDAToolkit_ROOT=$CUDA_PATH
+cmake --build hescan/build-gpu -j
+hescan/build-gpu/hescan_demo --logn 16 --gpu 1 --compare 1   # --device N picks the GPU
+```
+
+On CRC, `hescan/cluster/` wraps the same steps in SGE jobs (`install_deps.sh`, `build.sh`,
+`job_preflight.sh`, `job_bench.sh`).
+
+**Status.** The GPU build compiles and links against FIDESlib 2.2.0 (CUDA 13.5, sm_75), and
+the CPU kernel in the same binary passes. It has **not yet run on a GPU**, so no GPU timings
+or GPU accuracy numbers exist yet. Run `gpu_setup.sh test` first on new hardware.
+
 ## Not done yet
 
 * **Long sequences / streaming.** One block of L tokens is scanned at a time. `--h0 1`
@@ -153,4 +208,7 @@ cmake .. [-DOpenFHE_DIR=<prefix>/lib/OpenFHE] && make -j
   multiplies.
 * **Fixed split constants.** The 1/2 and −i/2 split factors on `x` and `B` could be folded
   into the output mask, saving the split level for the `U` path.
-* **No GPU kernels and no MPC side.**
+* **No MPC side.**
+* **GPU: single device, single stream.** Tokens and chunks are independent during broadcast
+  and contraction, so batching them or spreading them over CUDA streams or several GPUs is
+  the next speedup.

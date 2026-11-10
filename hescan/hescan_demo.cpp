@@ -156,7 +156,8 @@ int main(int argc, char** argv) {
         out = outCpu;
     }
 #ifdef HESCAN_WITH_GPU
-    else {
+    else try {
+        std::cout << std::flush;
         t0 = std::chrono::steady_clock::now();
         HEScanGPU gpuKernel(cc, cfg, keys.publicKey, device);
         std::cout << "  GPU setup (context + keys to device) " << Seconds(t0) << " s\n";
@@ -167,6 +168,10 @@ int main(int argc, char** argv) {
                   << ", scan " << tm.scan << ", contract " << tm.contract << ", download " << tm.download
                   << ")   device memory in use " << std::setprecision(2)
                   << HEScanGPU::DeviceMemoryUsed(device) / double(1u << 30) << " GiB\n";
+    }
+    catch (const std::exception& e) {
+        std::cerr << "GPU backend failed: " << e.what() << std::endl;
+        return 3;
     }
 #endif
 
