@@ -109,6 +109,8 @@ struct Timings {
     double broadcast = 0;  // complex split + br(), wall seconds
     double scan      = 0;  // prefix scan (+ h_0 term)
     double contract  = 0;  // Sum_{d_s} contraction + output mask / re-pairing
+    double upload    = 0;  // GPU only: OpenFHE -> device conversion of the incoming packet
+    double download  = 0;  // GPU only: device -> OpenFHE conversion of the outputs
 };
 
 class HEScan {

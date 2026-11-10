@@ -4,7 +4,15 @@
 //   ./hescan_demo [--H 4] [--P 4] [--G 2] [--ds 8] [--L 16] [--sstate 64]
 //                 [--scan bk|hs|seq] [--radix 2] [--complex 1] [--h0 0]
 //                 [--scaling flex|fixed] [--logn 15] [--secure 1] [--tol 1e-3] [--seed 1]
+//                 [--gpu 0] [--device 0] [--compare 0]
+//
+//   --gpu 1      run the kernel on the GPU through FIDESlib (needs a -DHESCAN_GPU=ON build)
+//   --compare 1  with --gpu 1: also run the CPU kernel on the same packet and report the
+//                CPU/GPU difference (decrypted, and whether the ciphertexts are bit-identical)
 #include "hescan.h"
+#ifdef HESCAN_WITH_GPU
+#include "hescan_gpu.h"
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -67,6 +75,15 @@ int main(int argc, char** argv) {
     const uint32_t logN = std::stoul(get("logn", "15"));
     const bool secure = get("secure", "1") == "1";
     const double tol  = std::stod(get("tol", "1e-3"));
+    const bool useGpu  = get("gpu", "0") == "1";
+    const int device   = std::stoi(get("device", "0"));
+    const bool compare = useGpu && get("compare", "0") == "1";
+#ifndef HESCAN_WITH_GPU
+    if (useGpu) {
+        std::cerr << "--gpu 1 needs a build with -DHESCAN_GPU=ON (FIDESlib); this binary is CPU-only\n";
+        return 2;
+    }
+#endif
 
     for (uint32_t L : {1u, 2u, 3u, 5u, 6u, 7u, 8u, 13u, 16u, 31u, 64u, 100u}) {
         if (!CheckSchedule(cfg.algo, L)) {
@@ -101,7 +118,9 @@ int main(int argc, char** argv) {
               << " K_s=" << cfg.Ks() << "\n"
               << "  scan=" << ScanAlgoName(cfg.algo) << " radix=" << cfg.radix
               << " complexPack=" << cfg.complexPack << " h0=" << cfg.withH0
-              << " scaling=" << (fixed ? "FIXEDAUTO" : "FLEXIBLEAUTO") << "\n"
+              << " scaling=" << (fixed ? "FIXEDAUTO" : "FLEXIBLEAUTO")
+              << " backend=" << (useGpu ? "GPU (FIDESlib), device " + std::to_string(device) : std::string("CPU"))
+              << "\n"
               << "  N=" << cc->GetRingDimension() << " depth D=" << D
               << " log2(Q)=" << cc->GetModulus().GetMSB()
               << " security=" << (secure ? "128-bit classic" : "NOT SET (toy)") << "\n";
@@ -123,13 +142,33 @@ int main(int argc, char** argv) {
               << " out]\n"
               << "  encrypt " << Seconds(t0) << " s\n";
 
-    HEScan kernel(cc, cfg);
     Timings tm;
-    t0       = std::chrono::steady_clock::now();
-    auto out = kernel.Run(enc, &tm);
-    double total = Seconds(t0);
-    std::cout << "  HEScan " << total << " s  (split+br " << tm.broadcast << ", scan "
-              << tm.scan << ", contract " << tm.contract << ")\n";
+    std::vector<std::vector<Ct>> out, outCpu;
+    if (!useGpu || compare) {
+        HEScan kernel(cc, cfg);
+        t0           = std::chrono::steady_clock::now();
+        outCpu       = kernel.Run(enc, &tm);
+        double total = Seconds(t0);
+        std::cout << "  HEScan CPU " << total << " s  (split+br " << tm.broadcast << ", scan "
+                  << tm.scan << ", contract " << tm.contract << ")\n";
+    }
+    if (!useGpu) {
+        out = outCpu;
+    }
+#ifdef HESCAN_WITH_GPU
+    else {
+        t0 = std::chrono::steady_clock::now();
+        HEScanGPU gpuKernel(cc, cfg, keys.publicKey, device);
+        std::cout << "  GPU setup (context + keys to device) " << Seconds(t0) << " s\n";
+        t0           = std::chrono::steady_clock::now();
+        out          = gpuKernel.Run(enc, &tm);
+        double total = Seconds(t0);
+        std::cout << "  HEScan GPU " << total << " s  (upload " << tm.upload << ", split+br " << tm.broadcast
+                  << ", scan " << tm.scan << ", contract " << tm.contract << ", download " << tm.download
+                  << ")   device memory in use " << std::setprecision(2)
+                  << HEScanGPU::DeviceMemoryUsed(device) / double(1u << 30) << " GiB\n";
+    }
+#endif
 
     uint32_t maxLevel = 0;
     for (auto& row : out)
@@ -139,6 +178,18 @@ int main(int argc, char** argv) {
 
     auto got  = DecryptOutput(cc, keys.secretKey, cfg, out);
     auto want = PlainReference(cfg, pkt);
+    if (compare) {
+        auto cpu      = DecryptOutput(cc, keys.secretKey, cfg, outCpu);
+        double diff   = 0;
+        for (size_t i = 0; i < cpu.size(); ++i)
+            diff = std::max(diff, std::abs(got[i] - cpu[i]));
+        size_t same = 0, total = 0;
+        for (size_t k = 0; k < out.size(); ++k)
+            for (size_t q = 0; q < out[k].size(); ++q, ++total)
+                same += (*out[k][q] == *outCpu[k][q]) ? 1 : 0;
+        std::cout << std::scientific << std::setprecision(3) << "  max|m_GPU - m_CPU| = " << diff
+                  << "   bit-identical ciphertexts: " << same << " / " << total << "\n";
+    }
     double maxErr = 0, maxRef = 0;
     for (size_t i = 0; i < want.size(); ++i) {
         maxErr = std::max(maxErr, std::abs(got[i] - want[i]));
